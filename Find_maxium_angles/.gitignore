@@ -1,0 +1,81 @@
+# C 編譯產物
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+
+# 執行檔
+*.exe
+txt_processor.exe
+txt_processor
+
+# 除錯檔案
+*.gdb
+*.pdb
+
+
+# 臨時檔案
+*~
+*.tmp
+*.temp
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# CMake 產物
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile.cmake
+
+# 建置目錄
+build/
+Build/
+bin/
+obj/
+Debug/
+Release/
+
+# 記錄檔
+*.log
+
+# Core dumps
+core
+core.*
+
+# 備份檔案
+*.bak
+*.backup
+
+# GTK 相關暫存檔
+gschemas.compiled
+
+# Windows 系統檔案
+desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+
+# Linux 系統檔案
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# macOS 系統檔案
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 壓縮檔案（通常不需要版控）
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tbz2
+*.rar
+*.7z

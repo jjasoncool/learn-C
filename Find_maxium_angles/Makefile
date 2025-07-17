@@ -8,7 +8,10 @@ CC = gcc
 TARGET = txt_processor.exe
 
 # 源檔案
-SOURCES = main.c
+SOURCES = main.c file_processor.c
+
+# 物件檔案
+OBJECTS = main.o file_processor.o
 
 # GTK 相關的編譯和連結標誌
 # 使用 pkg-config 來取得 GTK3 的編譯參數
@@ -19,12 +22,20 @@ LDFLAGS = $(shell pkg-config --libs gtk+-3.0)
 all: $(TARGET)
 
 # 編譯目標
-$(TARGET): $(SOURCES)
-	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCES) $(LDFLAGS)
+$(TARGET): $(OBJECTS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJECTS) $(LDFLAGS)
+
+# 編譯物件檔案
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# 明確定義依賴關係
+main.o: main.c file_processor.h
+file_processor.o: file_processor.c file_processor.h
 
 # 清理編譯產物
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) $(OBJECTS)
 
 # 執行程序
 run: $(TARGET)

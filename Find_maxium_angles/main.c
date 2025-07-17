@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "file_processor.h"
 
 // 全域變數
 GtkWidget *window;
@@ -13,6 +14,9 @@ char *selected_folder_path = NULL;
 
 // 選擇資料夾的回調函數
 static void on_folder_selected(GtkWidget *widget, gpointer data) {
+    (void)widget;  // 消除 unused parameter 警告
+    (void)data;    // 消除 unused parameter 警告
+
     GtkWidget *dialog;
     GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER;
     gint res;
@@ -54,31 +58,47 @@ static void on_folder_selected(GtkWidget *widget, gpointer data) {
     gtk_widget_destroy(dialog);
 }
 
-// 處理檔案的回調函數（暫時只是佔位符）
+// 處理檔案的回調函數
 static void on_process_files(GtkWidget *widget, gpointer data) {
+    (void)widget;  // 消除 unused parameter 警告
+    (void)data;    // 消除 unused parameter 警告
+
     if (!selected_folder_path) {
         gtk_label_set_text(GTK_LABEL(status_label), "請先選擇一個資料夾！");
         return;
     }
 
-    gtk_label_set_text(GTK_LABEL(status_label), "正在處理檔案...");
+    gtk_label_set_text(GTK_LABEL(status_label), "正在掃描 TXT 檔案...");
 
-    // 暫時顯示一個佔位符消息
-    char result_text[1024];
-    snprintf(result_text, sizeof(result_text),
-             "選中的資料夾: %s\n\n"
-             "功能開發中...\n"
-             "將來這裡會顯示：\n"
-             "- 找到的 txt 檔案列表\n"
-             "- 處理結果\n",
-             selected_folder_path);
-    gtk_text_buffer_set_text(text_buffer, result_text, -1);
+    // 使用檔案處理模組掃描 TXT 檔案
+    ScanResult result = scan_txt_files(selected_folder_path);
 
-    gtk_label_set_text(GTK_LABEL(status_label), "處理完成（功能開發中）");
+    // 格式化結果並顯示
+    char display_text[8192];
+    format_scan_result(&result, selected_folder_path, display_text, sizeof(display_text));
+    gtk_text_buffer_set_text(text_buffer, display_text, -1);
+
+    // 更新狀態標籤
+    if (result.success) {
+        if (result.count > 0) {
+            char status_text[256];
+            snprintf(status_text, sizeof(status_text), "掃描完成，找到 %d 個 TXT 檔案", result.count);
+            gtk_label_set_text(GTK_LABEL(status_label), status_text);
+        } else {
+            gtk_label_set_text(GTK_LABEL(status_label), "掃描完成，未找到 TXT 檔案");
+        }
+    } else {
+        gtk_label_set_text(GTK_LABEL(status_label), "掃描失敗");
+    }
+
+    // 釋放記憶體
+    free_scan_result(&result);
 }
 
 // 應用程序啟動時的回調函數
 static void activate(GtkApplication *app, gpointer user_data) {
+    (void)user_data;  // 消除 unused parameter 警告
+
     // 創建主窗口
     window = gtk_application_window_new(app);
     gtk_window_set_title(GTK_WINDOW(window), "TXT 檔案處理工具");
@@ -110,7 +130,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_pack_start(GTK_BOX(button_hbox), folder_button, FALSE, FALSE, 0);
 
     // 創建處理檔案按鈕
-    GtkWidget *process_button = gtk_button_new_with_label("處理檔案");
+    GtkWidget *process_button = gtk_button_new_with_label("掃描 TXT 檔案");
     gtk_widget_set_size_request(process_button, 120, 40);
     g_signal_connect(process_button, "clicked", G_CALLBACK(on_process_files), NULL);
     gtk_box_pack_start(GTK_BOX(button_hbox), process_button, FALSE, FALSE, 0);
@@ -152,7 +172,7 @@ int main(int argc, char **argv) {
     GtkApplication *app;
     int status;
 
-    app = gtk_application_new("com.example.txtprocessor", G_APPLICATION_FLAGS_NONE);
+    app = gtk_application_new("com.example.txtprocessor", G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
     status = g_application_run(G_APPLICATION(app), argc, argv);
 
