@@ -315,6 +315,12 @@ AngleAnalysisResult parse_angle_file(const char *file_path) {
 
 // 處理資料夾中的所有 TXT 檔案
 AngleAnalysisResult process_angle_files(const char *folder_path, const char *output_file) {
+    return process_angle_files_with_progress(folder_path, output_file, NULL, NULL);
+}
+
+// 處理資料夾中的所有 TXT 檔案（帶進度回調）
+AngleAnalysisResult process_angle_files_with_progress(const char *folder_path, const char *output_file,
+                                                     ProgressCallback progress_callback, void *user_data) {
     AngleAnalysisResult final_result = init_angle_analysis_result();
 
     if (!folder_path || !output_file) {
@@ -340,6 +346,11 @@ AngleAnalysisResult process_angle_files(const char *folder_path, const char *out
         // 跳過結果檔案
         if (is_result_file(filename)) {
             continue;
+        }
+
+        // 調用進度回調
+        if (progress_callback) {
+            progress_callback(i + 1, scan_result.count, filename, user_data);
         }
 
         gchar *file_path = g_build_filename(folder_path, filename, NULL);

@@ -3,6 +3,13 @@
 
 #include <gtk/gtk.h>  // 既然用 GTK，包含 glib 相關
 
+// 進度回調函數類型定義
+// current: 當前處理的檔案編號 (1-based)
+// total: 總檔案數量
+// filename: 當前處理的檔案名稱
+// user_data: 用戶自定義資料
+typedef void (*ProgressCallback)(int current, int total, const char *filename, void *user_data);
+
 // 檔案資訊結構
 typedef struct {
     char *name;  // 動態分配，別固定大小
@@ -102,6 +109,17 @@ AngleAnalysisResult parse_angle_file(const char *file_path);
  * @return AngleAnalysisResult 整體分析結果
  */
 AngleAnalysisResult process_angle_files(const char *folder_path, const char *output_file);
+
+/**
+ * 處理資料夾中的所有 TXT 檔案並分析角度（帶進度回調）
+ * @param folder_path 資料夾路徑
+ * @param output_file 輸出結果檔案名稱
+ * @param progress_callback 進度回調函數，可為 NULL
+ * @param user_data 傳遞給回調函數的用戶資料
+ * @return AngleAnalysisResult 整體分析結果
+ */
+AngleAnalysisResult process_angle_files_with_progress(const char *folder_path, const char *output_file,
+                                                     ProgressCallback progress_callback, void *user_data);
 
 /**
  * 釋放角度分析結果的記憶體

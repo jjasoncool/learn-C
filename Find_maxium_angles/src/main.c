@@ -11,13 +11,32 @@ typedef struct {
     GtkWidget *status_label;
     GtkWidget *result_text_view;
     GtkTextBuffer *text_buffer;
+    GtkWidget *progress_bar;
+    GtkWidget *progress_label;
+    GtkWidget *progress_container;
     char *selected_folder_path;
+    gboolean is_processing;  // 處理狀態標記
 } AppState;
+
+// 異步處理資料結構
+typedef struct {
+    AppState *app_state;
+    char *folder_path;
+    char *output_file;
+    AngleAnalysisResult result;
+    int max_search_success;
+    char *max_result_file_path;
+} AsyncProcessData;
 
 // 函數聲明
 static void on_folder_selected(GtkWidget *widget, gpointer data);
 static void on_process_files(GtkWidget *widget, gpointer data);
 static void on_analyze_angles(GtkWidget *widget, gpointer data);
+static void progress_callback(int current, int total, const char *filename, void *user_data);
+static gpointer angle_analysis_thread(gpointer data);
+static gboolean angle_analysis_finished(gpointer data);
+static void set_processing_state(AppState *state, gboolean processing);
+static void free_async_process_data(AsyncProcessData *data);
 
 // 選擇資料夾的回調函數
 static void on_folder_selected(GtkWidget *widget, gpointer data) {
@@ -79,6 +98,12 @@ static void on_process_files(GtkWidget *widget, gpointer data) {
         return;
     }
 
+    // 如果正在處理，則忽略
+    if (state->is_processing) {
+        gtk_label_set_text(GTK_LABEL(state->status_label), "正在處理中，請等待...");
+        return;
+    }
+
     gtk_label_set_text(GTK_LABEL(state->status_label), "正在掃描 TXT 檔案...");
 
     // 使用檔案處理模組掃描 TXT 檔案
@@ -125,97 +150,27 @@ static void on_analyze_angles(GtkWidget *widget, gpointer data) {
         return;
     }
 
-    gtk_label_set_text(GTK_LABEL(state->status_label), "Analyzing angle data...");
-
-    // 使用角度分析功能處理檔案
-    AngleAnalysisResult result = process_angle_files(state->selected_folder_path, "angle_analysis_result.txt");
-
-    if (!result.success) {
-        char *error_msg = g_strdup_printf("Angle analysis failed: %s", result.error ? result.error : "Unknown error");
-        gtk_label_set_text(GTK_LABEL(state->status_label), error_msg);
-        gtk_text_buffer_set_text(state->text_buffer, error_msg, -1);
-        g_free(error_msg);
-        free_angle_analysis_result(&result);
+    // 如果正在處理，則忽略
+    if (state->is_processing) {
+        gtk_label_set_text(GTK_LABEL(state->status_label), "正在處理中，請等待...");
         return;
     }
 
-    // 格式化結果顯示
-    GString *display_text = g_string_new("");
-    g_string_append_printf(display_text, "Angle Analysis Results:\n");
-    g_string_append_printf(display_text, "===========================================\n");
-    g_string_append_printf(display_text, "Folder: %s\n\n", state->selected_folder_path);
+    // 設定處理狀態
+    set_processing_state(state, TRUE);
+    gtk_label_set_text(GTK_LABEL(state->status_label), "開始角度分析...");
 
-    if (result.count == 0) {
-        g_string_append(display_text, "No valid angle data found\n");
-    } else {
-        g_string_append_printf(display_text, "Found %d angle data groups:\n\n", result.count);
+    // 準備異步處理資料
+    AsyncProcessData *async_data = g_new0(AsyncProcessData, 1);
+    async_data->app_state = state;
+    async_data->folder_path = g_strdup(state->selected_folder_path);
+    async_data->output_file = g_strdup("angle_analysis_result.txt");
+    async_data->max_search_success = 0;
+    async_data->max_result_file_path = NULL;
 
-        for (int i = 0; i < result.count; i++) {
-            AngleRange *range = &result.ranges[i];
-            g_string_append_printf(display_text,
-                "profile: %d\n"
-                "  bin range: %d ~ %d\n"
-                "  angle range: %.2f ~ %.2f\n"
-                "  angle difference: %.2f\n\n",
-                range->first_num,
-                range->min_second, range->max_second,
-                range->min_third, range->max_third,
-                range->angle_diff);
-        }
-
-        g_string_append_printf(display_text, "===========================================\n");
-        g_string_append_printf(display_text, "Results saved to: angle_analysis_result.txt\n");
-        g_string_append_printf(display_text, "File format: profile bin angle\n");
-    }
-
-    // 自動執行最大角度查找
-    gtk_label_set_text(GTK_LABEL(state->status_label), "Finding maximum angle difference...");
-
-    // 設定結果檔案和輸出檔案路徑
-    gchar *result_file_path = g_build_filename(state->selected_folder_path, "angle_analysis_result.txt", NULL);
-    gchar *output_file_path = g_build_filename(state->selected_folder_path, "max_angle_result.txt", NULL);
-
-    // 執行最大角度搜尋
-    int max_search_success = find_max_angle_difference(result_file_path, output_file_path);
-
-    if (max_search_success) {
-        // 讀取最大角度結果並添加到顯示文字
-        FILE *max_output_file = fopen(output_file_path, "r");
-        if (max_output_file) {
-            g_string_append_printf(display_text, "\n\n");
-            g_string_append_printf(display_text, "===========================================\n");
-            g_string_append_printf(display_text, "Maximum Angle Difference Analysis:\n");
-            g_string_append_printf(display_text, "===========================================\n");
-
-            char line[256];
-            while (fgets(line, sizeof(line), max_output_file)) {
-                g_string_append(display_text, line);
-            }
-            fclose(max_output_file);
-
-            g_string_append_printf(display_text, "\nResults also saved to: max_angle_result.txt\n");
-
-            gtk_label_set_text(GTK_LABEL(state->status_label), "Angle analysis and maximum angle search completed!");
-        } else {
-            gtk_label_set_text(GTK_LABEL(state->status_label), "Angle analysis completed, but cannot read maximum angle results");
-        }
-    } else {
-        gtk_label_set_text(GTK_LABEL(state->status_label), "Angle analysis completed, but maximum angle search failed");
-    }
-
-    // 顯示完整結果（包含角度分析和最大角度結果）
-    gtk_text_buffer_set_text(state->text_buffer, display_text->str, -1);
-    g_string_free(display_text, TRUE);
-
-    // 更新狀態標籤
-    char *status_text = g_strdup_printf("處理完成，分析了 %d 組資料", result.count);
-    gtk_label_set_text(GTK_LABEL(state->status_label), status_text);
-    g_free(status_text);
-
-    // 釋放記憶體
-    free_angle_analysis_result(&result);
-    g_free(result_file_path);
-    g_free(output_file_path);
+    // 啟動工作執行緒
+    GThread *thread = g_thread_new("angle_analysis", angle_analysis_thread, async_data);
+    g_thread_unref(thread); // 讓執行緒自動清理
 }
 
 // 應用程序啟動時的回調函數
@@ -269,6 +224,23 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_label_set_xalign(GTK_LABEL(state->status_label), 0.0);
     gtk_box_pack_start(GTK_BOX(main_vbox), state->status_label, FALSE, FALSE, 0);
 
+    // 創建進度條容器（初始隱藏）
+    state->progress_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+    gtk_box_pack_start(GTK_BOX(main_vbox), state->progress_container, FALSE, FALSE, 0);
+
+    // 創建進度標籤
+    state->progress_label = gtk_label_new("");
+    gtk_label_set_xalign(GTK_LABEL(state->progress_label), 0.0);
+    gtk_box_pack_start(GTK_BOX(state->progress_container), state->progress_label, FALSE, FALSE, 0);
+
+    // 創建進度條
+    state->progress_bar = gtk_progress_bar_new();
+    gtk_progress_bar_set_show_text(GTK_PROGRESS_BAR(state->progress_bar), TRUE);
+    gtk_box_pack_start(GTK_BOX(state->progress_container), state->progress_bar, FALSE, FALSE, 0);
+
+    // 初始隱藏進度容器
+    gtk_widget_hide(state->progress_container);
+
     // 創建另一個分隔線
     GtkWidget *separator2 = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
     gtk_box_pack_start(GTK_BOX(main_vbox), separator2, FALSE, FALSE, 0);
@@ -305,6 +277,183 @@ static void free_app_state(AppState *state) {
     }
 }
 
+// 進度更新資料結構
+typedef struct {
+    AppState *state;
+    double progress;
+    gchar *text;
+} ProgressUpdateData;
+
+// 在主執行緒中更新進度 UI
+static gboolean update_progress_ui(gpointer data) {
+    ProgressUpdateData *update_data = (ProgressUpdateData *)data;
+    AppState *state = update_data->state;
+
+    // 更新進度條
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(state->progress_bar), update_data->progress);
+
+    // 更新進度標籤
+    gtk_label_set_text(GTK_LABEL(state->progress_label), update_data->text);
+
+    g_free(update_data->text);
+    return FALSE; // 只執行一次
+}
+
+// 進度回調函數（在工作執行緒中調用）
+static void progress_callback(int current, int total, const char *filename, void *user_data) {
+    AsyncProcessData *async_data = (AsyncProcessData *)user_data;
+    AppState *state = async_data->app_state;
+
+    // 計算進度百分比
+    double progress = (double)current / total;
+
+    // 建立進度資訊字串
+    gchar *progress_text = g_strdup_printf("處理檔案 %d/%d: %s", current, total, filename);
+
+    // 建立進度更新資料
+    ProgressUpdateData *update_data = g_new(ProgressUpdateData, 1);
+    update_data->state = state;
+    update_data->progress = progress;
+    update_data->text = progress_text;
+
+    // 在主執行緒中更新 UI
+    g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, update_progress_ui, update_data, g_free);
+}
+
+// 設定處理狀態
+static void set_processing_state(AppState *state, gboolean processing) {
+    state->is_processing = processing;
+
+    // 控制按鈕是否可用
+    gtk_widget_set_sensitive(state->folder_button, !processing);
+
+    // 顯示或隱藏進度條
+    if (processing) {
+        gtk_widget_show(state->progress_container);
+        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(state->progress_bar), 0.0);
+        gtk_label_set_text(GTK_LABEL(state->progress_label), "準備開始處理...");
+    } else {
+        gtk_widget_hide(state->progress_container);
+    }
+}
+
+// 工作執行緒函數
+static gpointer angle_analysis_thread(gpointer data) {
+    AsyncProcessData *async_data = (AsyncProcessData *)data;
+
+    // 執行角度分析（帶進度回調）
+    async_data->result = process_angle_files_with_progress(
+        async_data->folder_path,
+        async_data->output_file,
+        progress_callback,
+        async_data
+    );
+
+    // 如果角度分析成功，執行最大角度搜尋
+    if (async_data->result.success) {
+        gchar *result_file_path = g_build_filename(async_data->folder_path, "angle_analysis_result.txt", NULL);
+        async_data->max_result_file_path = g_build_filename(async_data->folder_path, "max_angle_result.txt", NULL);
+
+        async_data->max_search_success = find_max_angle_difference(result_file_path, async_data->max_result_file_path);
+        g_free(result_file_path);
+    }
+
+    // 在主執行緒中完成處理
+    g_idle_add(angle_analysis_finished, async_data);
+    return NULL;
+}
+
+// 異步處理完成回調（在主執行緒中執行）
+static gboolean angle_analysis_finished(gpointer data) {
+    AsyncProcessData *async_data = (AsyncProcessData *)data;
+    AppState *state = async_data->app_state;
+    AngleAnalysisResult *result = &async_data->result;
+
+    // 還原處理狀態
+    set_processing_state(state, FALSE);
+
+    if (!result->success) {
+        char *error_msg = g_strdup_printf("Angle analysis failed: %s", result->error ? result->error : "Unknown error");
+        gtk_label_set_text(GTK_LABEL(state->status_label), error_msg);
+        gtk_text_buffer_set_text(state->text_buffer, error_msg, -1);
+        g_free(error_msg);
+        free_async_process_data(async_data);
+        return FALSE;
+    }
+
+    // 格式化結果顯示
+    GString *display_text = g_string_new("");
+    g_string_append_printf(display_text, "Angle Analysis Results:\n");
+    g_string_append_printf(display_text, "===========================================\n");
+    g_string_append_printf(display_text, "Folder: %s\n\n", async_data->folder_path);
+
+    if (result->count == 0) {
+        g_string_append(display_text, "No valid angle data found\n");
+    } else {
+        g_string_append_printf(display_text, "Found %d angle data groups:\n\n", result->count);
+
+        for (int i = 0; i < result->count; i++) {
+            AngleRange *range = &result->ranges[i];
+            g_string_append_printf(display_text,
+                "profile: %d\n"
+                "  bin range: %d ~ %d\n"
+                "  angle range: %.2f ~ %.2f\n"
+                "  angle difference: %.2f\n\n",
+                range->first_num,
+                range->min_second, range->max_second,
+                range->min_third, range->max_third,
+                range->angle_diff);
+        }
+
+        g_string_append_printf(display_text, "===========================================\n");
+        g_string_append_printf(display_text, "Results saved to: angle_analysis_result.txt\n");
+        g_string_append_printf(display_text, "File format: profile bin angle\n");
+    }
+
+    // 處理最大角度結果
+    if (async_data->max_search_success && async_data->max_result_file_path) {
+        FILE *max_output_file = fopen(async_data->max_result_file_path, "r");
+        if (max_output_file) {
+            g_string_append_printf(display_text, "\n\n");
+            g_string_append_printf(display_text, "===========================================\n");
+            g_string_append_printf(display_text, "Maximum Angle Difference Analysis:\n");
+            g_string_append_printf(display_text, "===========================================\n");
+
+            char line[256];
+            while (fgets(line, sizeof(line), max_output_file)) {
+                g_string_append(display_text, line);
+            }
+            fclose(max_output_file);
+
+            g_string_append_printf(display_text, "\nResults also saved to: max_angle_result.txt\n");
+            gtk_label_set_text(GTK_LABEL(state->status_label), "角度分析和最大角度搜尋完成！");
+        } else {
+            gtk_label_set_text(GTK_LABEL(state->status_label), "角度分析完成，但無法讀取最大角度結果");
+        }
+    } else {
+        gtk_label_set_text(GTK_LABEL(state->status_label), "角度分析完成，但最大角度搜尋失敗");
+    }
+
+    // 顯示完整結果
+    gtk_text_buffer_set_text(state->text_buffer, display_text->str, -1);
+    g_string_free(display_text, TRUE);
+
+    // 清理資源
+    free_async_process_data(async_data);
+    return FALSE; // 只執行一次
+}
+
+// 清理異步處理資料
+static void free_async_process_data(AsyncProcessData *data) {
+    if (data) {
+        g_free(data->folder_path);
+        g_free(data->output_file);
+        g_free(data->max_result_file_path);
+        free_angle_analysis_result(&data->result);
+        g_free(data);
+    }
+}
+
 int main(int argc, char **argv) {
     GtkApplication *app;
     int status;
@@ -314,6 +463,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     memset(state, 0, sizeof(AppState));  // 清零以避免垃圾
+    state->is_processing = FALSE;  // 初始化處理狀態
 
     app = gtk_application_new("com.example.txtprocessor", G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app, "activate", G_CALLBACK(activate), state);
