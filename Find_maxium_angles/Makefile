@@ -31,7 +31,7 @@ ifeq ($(BUILD_MODE), debug)
     CFLAGS = $(BASE_CFLAGS) -g -DDEBUG -O0        # 除錯版本: 包含除錯資訊, 無優化
     TARGET_SUFFIX = _debug
 else
-    CFLAGS = $(BASE_CFLAGS) -O2 -DNDEBUG          # 正式版本: 優化編譯, 移除斷言
+    CFLAGS = $(BASE_CFLAGS) -O2 -DNDEBUG -mwindows # 正式版本: 優化編譯, 移除斷言, 隱藏控制台
     TARGET_SUFFIX =
 endif
 

@@ -62,7 +62,7 @@ ScanResult scan_txt_files(const char *folder_path) {
         if (info && !error) {
             if (g_file_info_has_attribute(info, G_FILE_ATTRIBUTE_STANDARD_TYPE) &&
                 g_file_info_get_file_type(info) == G_FILE_TYPE_REGULAR &&
-                is_txt_file(filename)) {
+                is_txt_file(filename) && !is_result_file(filename)) {  // 添加結果檔案過濾
                 if (result.count >= result.capacity) {
                     if (!expand_file_array(&result)) {
                         result.error = strdup("記憶體分配失敗");
