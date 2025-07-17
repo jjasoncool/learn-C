@@ -14,6 +14,11 @@ typedef struct {
     char *selected_folder_path;
 } AppState;
 
+// 函數聲明
+static void on_folder_selected(GtkWidget *widget, gpointer data);
+static void on_process_files(GtkWidget *widget, gpointer data);
+static void on_analyze_angles(GtkWidget *widget, gpointer data);
+
 // 選擇資料夾的回調函數
 static void on_folder_selected(GtkWidget *widget, gpointer data) {
     (void)widget;  // 暫時壓警告，但之後修根源
@@ -110,6 +115,109 @@ static void on_process_files(GtkWidget *widget, gpointer data) {
     free_scan_result(&result);
 }
 
+// 角度分析的回調函數
+static void on_analyze_angles(GtkWidget *widget, gpointer data) {
+    (void)widget;  // 壓制警告
+    AppState *state = (AppState *)data;
+
+    if (!state->selected_folder_path) {
+        gtk_label_set_text(GTK_LABEL(state->status_label), "請先選擇一個資料夾！");
+        return;
+    }
+
+    gtk_label_set_text(GTK_LABEL(state->status_label), "Analyzing angle data...");
+
+    // 使用角度分析功能處理檔案
+    AngleAnalysisResult result = process_angle_files(state->selected_folder_path, "angle_analysis_result.txt");
+
+    if (!result.success) {
+        char *error_msg = g_strdup_printf("Angle analysis failed: %s", result.error ? result.error : "Unknown error");
+        gtk_label_set_text(GTK_LABEL(state->status_label), error_msg);
+        gtk_text_buffer_set_text(state->text_buffer, error_msg, -1);
+        g_free(error_msg);
+        free_angle_analysis_result(&result);
+        return;
+    }
+
+    // 格式化結果顯示
+    GString *display_text = g_string_new("");
+    g_string_append_printf(display_text, "Angle Analysis Results:\n");
+    g_string_append_printf(display_text, "===========================================\n");
+    g_string_append_printf(display_text, "Folder: %s\n\n", state->selected_folder_path);
+
+    if (result.count == 0) {
+        g_string_append(display_text, "No valid angle data found\n");
+    } else {
+        g_string_append_printf(display_text, "Found %d angle data groups:\n\n", result.count);
+
+        for (int i = 0; i < result.count; i++) {
+            AngleRange *range = &result.ranges[i];
+            g_string_append_printf(display_text,
+                "profile: %d\n"
+                "  bin range: %d ~ %d\n"
+                "  angle range: %.2f ~ %.2f\n"
+                "  angle difference: %.2f\n\n",
+                range->first_num,
+                range->min_second, range->max_second,
+                range->min_third, range->max_third,
+                range->angle_diff);
+        }
+
+        g_string_append_printf(display_text, "===========================================\n");
+        g_string_append_printf(display_text, "Results saved to: angle_analysis_result.txt\n");
+        g_string_append_printf(display_text, "File format: profile bin angle\n");
+    }
+
+    // 自動執行最大角度查找
+    gtk_label_set_text(GTK_LABEL(state->status_label), "Finding maximum angle difference...");
+
+    // 設定結果檔案和輸出檔案路徑
+    gchar *result_file_path = g_build_filename(state->selected_folder_path, "angle_analysis_result.txt", NULL);
+    gchar *output_file_path = g_build_filename(state->selected_folder_path, "max_angle_result.txt", NULL);
+
+    // 執行最大角度搜尋
+    int max_search_success = find_max_angle_difference(result_file_path, output_file_path);
+
+    if (max_search_success) {
+        // 讀取最大角度結果並添加到顯示文字
+        FILE *max_output_file = fopen(output_file_path, "r");
+        if (max_output_file) {
+            g_string_append_printf(display_text, "\n\n");
+            g_string_append_printf(display_text, "===========================================\n");
+            g_string_append_printf(display_text, "Maximum Angle Difference Analysis:\n");
+            g_string_append_printf(display_text, "===========================================\n");
+
+            char line[256];
+            while (fgets(line, sizeof(line), max_output_file)) {
+                g_string_append(display_text, line);
+            }
+            fclose(max_output_file);
+
+            g_string_append_printf(display_text, "\nResults also saved to: max_angle_result.txt\n");
+
+            gtk_label_set_text(GTK_LABEL(state->status_label), "Angle analysis and maximum angle search completed!");
+        } else {
+            gtk_label_set_text(GTK_LABEL(state->status_label), "Angle analysis completed, but cannot read maximum angle results");
+        }
+    } else {
+        gtk_label_set_text(GTK_LABEL(state->status_label), "Angle analysis completed, but maximum angle search failed");
+    }
+
+    // 顯示完整結果（包含角度分析和最大角度結果）
+    gtk_text_buffer_set_text(state->text_buffer, display_text->str, -1);
+    g_string_free(display_text, TRUE);
+
+    // 更新狀態標籤
+    char *status_text = g_strdup_printf("處理完成，分析了 %d 組資料", result.count);
+    gtk_label_set_text(GTK_LABEL(state->status_label), status_text);
+    g_free(status_text);
+
+    // 釋放記憶體
+    free_angle_analysis_result(&result);
+    g_free(result_file_path);
+    g_free(output_file_path);
+}
+
 // 應用程序啟動時的回調函數
 static void activate(GtkApplication *app, gpointer user_data) {
     AppState *state = (AppState *)user_data;
@@ -149,6 +257,12 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_size_request(process_button, 120, 40);
     g_signal_connect(process_button, "clicked", G_CALLBACK(on_process_files), state);
     gtk_box_pack_start(GTK_BOX(button_hbox), process_button, FALSE, FALSE, 0);
+
+    // 創建角度分析按鈕（包含最大角度查找）
+    GtkWidget *angle_button = gtk_button_new_with_label("分析角度並找最大值");
+    gtk_widget_set_size_request(angle_button, 150, 40);
+    g_signal_connect(angle_button, "clicked", G_CALLBACK(on_analyze_angles), state);
+    gtk_box_pack_start(GTK_BOX(button_hbox), angle_button, FALSE, FALSE, 0);
 
     // 創建狀態標籤
     state->status_label = gtk_label_new("請選擇一個包含 TXT 檔案的資料夾");

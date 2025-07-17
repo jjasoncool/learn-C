@@ -79,3 +79,5 @@ $RECYCLE.BIN/
 *.tbz2
 *.rar
 *.7z
+
+test_data/*angle*.txt
