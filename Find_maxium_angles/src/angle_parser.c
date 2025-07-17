@@ -7,6 +7,7 @@
 #include "angle_parser.h"
 #include "scan.h"
 #include "safe_getline.h"
+#include "max_finder.h"
 
 // 全局 mutex 保護 hash table 操作
 static GMutex angle_parser_mutex;
@@ -255,9 +256,8 @@ AngleAnalysisResult process_angle_files_with_progress(const char *folder_path,
                                                      void *user_data) {
     AngleAnalysisResult final_result = init_angle_analysis_result();
     ScanResult scan_result = {0};
-    GHashTable *all_ranges = NULL;
-    FILE *output = NULL;
     gchar *output_path = NULL;
+    FILE *output_file_handle = NULL;
 
     if (!folder_path || !output_file) {
         final_result.error = g_strdup("資料夾路徑或輸出檔案名稱為空");
@@ -272,15 +272,25 @@ AngleAnalysisResult process_angle_files_with_progress(const char *folder_path,
         goto cleanup;
     }
 
-    // 創建雜湊表來累積所有檔案的結果
-    all_ranges = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, g_free);
-    if (!all_ranges) {
-        final_result.error = g_strdup("無法創建雜湊表");
-        g_printerr("Error: Failed to create hash table for all ranges\n");
+    // 直接打開輸出檔案
+    output_path = g_build_filename(folder_path, output_file, NULL);
+    if (!output_path) {
+        final_result.error = g_strdup("無法建構輸出檔案路徑");
         goto cleanup;
     }
 
-    // 處理每個檔案
+    output_file_handle = fopen(output_path, "w");
+    if (!output_file_handle) {
+        final_result.error = g_strdup_printf("無法創建輸出檔案: %s", output_path);
+        goto cleanup;
+    }
+
+    // 寫入檔案標題
+    fprintf(output_file_handle, "Maximum Angle Difference Analysis Results (Per File)\n");
+    fprintf(output_file_handle, "=====================================================\n\n");
+
+    // 處理每個檔案，直接寫入分析結果
+    int processed_files = 0;
     for (int i = 0; i < scan_result.count; i++) {
         const char *filename = scan_result.files[i].name;
 
@@ -302,106 +312,48 @@ AngleAnalysisResult process_angle_files_with_progress(const char *folder_path,
 
         AngleAnalysisResult file_result = parse_angle_file(file_path);
 
-        if (file_result.success) {
-            // 合併結果到總表中
+        if (file_result.success && file_result.count > 0) {
+            // 直接分析這個檔案的最大角度差值並寫入
+            double max_diff = 0.0;
+            int best_profile = -1;
+            double best_min_angle = 0.0, best_max_angle = 0.0;
+            int best_min_bin = -1, best_max_bin = -1;
+
+            // 找出這個檔案的最大角度差值
             for (int j = 0; j < file_result.count; j++) {
                 AngleRange *range = &file_result.ranges[j];
-                gint *key = g_new(gint, 1);
-                if (!key) {
-                    g_printerr("Error: Failed to allocate memory for hash key\n");
-                    free_angle_analysis_result(&file_result);
-                    g_free(file_path);
-                    goto cleanup;
-                }
-                *key = range->first_num;
-
-                AngleRange *existing = g_hash_table_lookup(all_ranges, key);
-                if (!existing) {
-                    // 新的第一段數字，直接添加
-                    AngleRange *new_range = g_new(AngleRange, 1);
-                    if (!new_range) {
-                        g_printerr("Error: Failed to allocate memory for new range\n");
-                        g_free(key);
-                        free_angle_analysis_result(&file_result);
-                        g_free(file_path);
-                        goto cleanup;
-                    }
-                    *new_range = *range;
-                    g_hash_table_insert(all_ranges, key, new_range);
-                } else {
-                    // 已存在，更新最大差值的範圍
-                    g_free(key);
-                    if (range->angle_diff > existing->angle_diff) {
-                        *existing = *range;
-                    }
+                if (range->angle_diff > max_diff) {
+                    max_diff = range->angle_diff;
+                    best_profile = range->first_num;
+                    best_min_angle = range->min_third;
+                    best_max_angle = range->max_third;
+                    best_min_bin = range->min_second;
+                    best_max_bin = range->max_second;
                 }
             }
-        } else {
-            g_printerr("Warning: Failed to parse file '%s': %s\n",
-                      file_path, file_result.error ? file_result.error : "unknown error");
+
+            // 直接寫入分析結果到檔案
+            fprintf(output_file_handle, "File: %s\n", filename);
+            fprintf(output_file_handle, "Profile with maximum angle difference: %d\n", best_profile);
+            fprintf(output_file_handle, "Angle difference: %.6f\n", max_diff);
+            fprintf(output_file_handle, "Min angle: %.6f (bin %d)\n", best_min_angle, best_min_bin);
+            fprintf(output_file_handle, "Max angle: %.6f (bin %d)\n", best_max_angle, best_max_bin);
+            fprintf(output_file_handle, "Bin range: %d ~ %d\n", best_min_bin, best_max_bin);
+            fprintf(output_file_handle, "\n");
+
+            processed_files++;
         }
 
         free_angle_analysis_result(&file_result);
         g_free(file_path);
     }
 
-    // 將雜湊表的資料轉移到結果陣列中
-    GHashTableIter iter;
-    gpointer key, value;
-    g_hash_table_iter_init(&iter, all_ranges);
-
-    while (g_hash_table_iter_next(&iter, &key, &value)) {
-        if (final_result.count >= final_result.capacity) {
-            if (!expand_angle_range_array(&final_result)) {
-                final_result.error = g_strdup("記憶體分配失敗");
-                goto cleanup;
-            }
-        }
-
-        final_result.ranges[final_result.count] = *(AngleRange*)value;
-        final_result.count++;
-    }
-
-    // 寫入結果檔案
-    output_path = g_build_filename(folder_path, output_file, NULL);
-    if (!output_path) {
-        final_result.error = g_strdup("無法建構輸出檔案路徑");
-        g_printerr("Error: Failed to build output file path\n");
-        goto cleanup;
-    }
-
-    output = fopen(output_path, "w");
-    if (!output) {
-        final_result.error = g_strdup_printf("無法創建輸出檔案: %s", output_path);
-        g_printerr("Error: Failed to create output file '%s': %s\n", output_path, strerror(errno));
-        goto cleanup;
-    }
-
-    for (int i = 0; i < final_result.count; i++) {
-        AngleRange *range = &final_result.ranges[i];
-        if (fprintf(output, "%d %d %.6f\n", range->first_num, range->min_second, range->min_third) < 0) {
-            final_result.error = g_strdup("寫入輸出檔案失敗");
-            g_printerr("Error: Failed to write to output file '%s'\n", output_path);
-            goto cleanup;
-        }
-        if (fprintf(output, "%d %d %.6f\n", range->first_num, range->max_second, range->max_third) < 0) {
-            final_result.error = g_strdup("寫入輸出檔案失敗");
-            g_printerr("Error: Failed to write to output file '%s'\n", output_path);
-            goto cleanup;
-        }
-    }
-
+    final_result.count = processed_files;
     final_result.success = 1;
 
 cleanup:
-    if (output) {
-        if (fclose(output) != 0 && final_result.success) {
-            final_result.error = g_strdup("無法正確關閉輸出檔案");
-            final_result.success = 0;
-        }
-    }
-    if (all_ranges) {
-        g_hash_table_destroy(all_ranges);
+    if (output_file_handle) {
+        fclose(output_file_handle);
     }
     if (output_path) {
         g_free(output_path);

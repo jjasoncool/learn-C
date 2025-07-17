@@ -155,7 +155,8 @@ static gpointer angle_analysis_thread(gpointer data) {
             if (async_data->max_result_file_path) {
                 // 再次檢查取消請求
                 if (!is_cancel_requested(async_data->app_state)) {
-                    async_data->max_search_success = find_max_angle_difference(result_file_path, async_data->max_result_file_path);
+                    // 從 angle_analysis_result.txt 中找出全域最大角度差值輸出到 max_angle_result.txt
+                    async_data->max_search_success = find_global_max_from_analysis_result(result_file_path, async_data->max_result_file_path);
                 } else {
                     async_data->max_search_success = 0;
                 }
@@ -202,24 +203,9 @@ static gboolean angle_analysis_finished(gpointer data) {
     if (result->count == 0) {
         g_string_append(display_text, "未找到有效的角度資料\n");
     } else {
-        g_string_append_printf(display_text, "找到 %d 組角度資料:\n\n", result->count);
-
-        for (int i = 0; i < result->count; i++) {
-            AngleRange *range = &result->ranges[i];
-            g_string_append_printf(display_text,
-                "profile: %d\n"
-                "  bin 範圍: %d ~ %d\n"
-                "  角度範圍: %.2f ~ %.2f\n"
-                "  角度差值: %.2f\n\n",
-                range->first_num,
-                range->min_second, range->max_second,
-                range->min_third, range->max_third,
-                range->angle_diff);
-        }
-
+        g_string_append_printf(display_text, "成功處理 %d 個檔案\n\n", result->count);
         g_string_append_printf(display_text, "===========================================\n");
-        g_string_append_printf(display_text, "結果已儲存至: angle_analysis_result.txt\n");
-        g_string_append_printf(display_text, "檔案格式: profile bin angle\n");
+        g_string_append_printf(display_text, "每個檔案的分析結果已儲存至: angle_analysis_result.txt\n");
     }
 
     // 處理最大角度結果

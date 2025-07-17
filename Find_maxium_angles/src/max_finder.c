@@ -2,121 +2,69 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <math.h>
 #include <gtk/gtk.h>
 #include "max_finder.h"
 #include "safe_getline.h"
 
-// 靜態函數聲明
-static int parse_result_line(const char *line, MaxAngleData *data);
-static int compare_angle_data(const void *a, const void *b);
-
-// 解析結果檔案中的單行資料
-static int parse_result_line(const char *line, MaxAngleData *data) {
-    if (!line || !data) {
-        g_printerr("Error: parse_result_line called with NULL parameters\n");
-        return 0;
-    }
-
-    // 跳過空行和註釋
-    if (line[0] == '\0' || line[0] == '#' || line[0] == '\n') {
-        return 0;
-    }
-
-    // 嘗試解析三個數字
-    int parsed = sscanf(line, "%d %d %lf", &data->profile, &data->bin, &data->angle);
-    if (parsed == EOF) {
-        g_printerr("Warning: EOF encountered while parsing line\n");
-        return 0;
-    }
-    if (parsed != 3) {
-        g_printerr("Warning: Failed to parse result line (got %d/3 fields): %.50s\n", parsed, line);
-        return 0;
-    }
-
-    // 基本有效性檢查
-    if (data->profile < 0 || data->bin < 0) {
-        g_printerr("Warning: Invalid negative values in result line: %d %d %f\n",
-                  data->profile, data->bin, data->angle);
-        return 0;
-    }
-
-    // 檢查 NaN 和無限值
-    if (!isfinite(data->angle)) {
-        g_printerr("Warning: Invalid angle value (NaN/Inf) in result line: %d %d %f\n",
-                  data->profile, data->bin, data->angle);
-        return 0;
-    }
-
-    return 1;
-}
-
-// 比較函數，用於找出最大角度差值
-static int compare_angle_data(const void *a, const void *b) {
-    const MaxAngleData *data_a = (const MaxAngleData *)a;
-    const MaxAngleData *data_b = (const MaxAngleData *)b;
-
-    // 先按 profile 分組
-    if (data_a->profile != data_b->profile) {
-        return data_a->profile - data_b->profile;
-    }
-
-    // 同一 profile 內按角度排序
-    if (data_a->angle < data_b->angle) return -1;
-    if (data_a->angle > data_b->angle) return 1;
-    return 0;
-}
-
-// 從角度分析結果檔案中找出最大角度差值的一組數據
-int find_max_angle_difference(const char *result_file_path, const char *output_file_path) {
+// 從每個檔案的最大角度差值分析結果中找出全域最大的結果
+int find_global_max_from_analysis_result(const char *analysis_result_file_path, const char *output_file_path) {
     FILE *input_file = NULL;
     FILE *output_file = NULL;
     char *line = NULL;
-    MaxAngleData *data_array = NULL;
-    int data_count = 0;
-    int data_capacity = 0;
+    char *best_filename = NULL;
+    int best_profile = -1;
+    double best_max_diff = 0.0;
+    char *current_filename = NULL;
+    int current_profile = -1;
     int success = 0;
 
-    if (!result_file_path || !output_file_path) {
-        g_printerr("Error: find_max_angle_difference called with NULL parameters\n");
+    if (!analysis_result_file_path || !output_file_path) {
+        g_printerr("Error: find_global_max_from_analysis_result called with NULL parameters\n");
         return 0;
     }
 
     // 開啟輸入檔案
-    input_file = fopen(result_file_path, "r");
+    input_file = fopen(analysis_result_file_path, "r");
     if (!input_file) {
-        g_printerr("Error: Failed to open result file '%s': %s\n",
-                  result_file_path, strerror(errno));
+        g_printerr("Error: Failed to open analysis result file '%s': %s\n",
+                  analysis_result_file_path, strerror(errno));
         goto cleanup;
     }
 
-    // 讀取所有資料
-    int line_number = 0;
+    // 解析檔案內容，找出最大角度差值
     while ((line = safe_getline(input_file)) != NULL) {
-        line_number++;
-
-        MaxAngleData data;
-        if (!parse_result_line(line, &data)) {
-            free(line);
-            line = NULL;
-            continue;
-        }
-
-        // 擴展陣列容量
-        if (data_count >= data_capacity) {
-            int new_capacity = data_capacity == 0 ? 100 : data_capacity * 2;
-            MaxAngleData *new_array = realloc(data_array, new_capacity * sizeof(MaxAngleData));
-            if (!new_array) {
-                g_printerr("Error: Failed to expand data array to %d items\n", new_capacity);
-                free(line);
-                goto cleanup;
+        // 檢查是否是檔案行
+        if (strncmp(line, "File: ", 6) == 0) {
+            free(current_filename);
+            current_filename = strdup(line + 6);
+            if (current_filename) {
+                // 移除行尾的換行符
+                size_t len = strlen(current_filename);
+                while (len > 0 && (current_filename[len-1] == '\n' || current_filename[len-1] == '\r')) {
+                    current_filename[len-1] = '\0';
+                    len--;
+                }
             }
-            data_array = new_array;
-            data_capacity = new_capacity;
+            current_profile = -1; // 重設 profile
         }
-
-        data_array[data_count] = data;
-        data_count++;
+        // 檢查是否是 profile 行
+        else if (strncmp(line, "Profile with maximum angle difference: ", 39) == 0) {
+            if (sscanf(line, "Profile with maximum angle difference: %d", &current_profile) != 1) {
+                current_profile = -1;
+            }
+        }
+        // 檢查是否是角度差值行
+        else if (strncmp(line, "Angle difference: ", 18) == 0 && current_filename && current_profile != -1) {
+            double angle_diff;
+            if (sscanf(line, "Angle difference: %lf", &angle_diff) == 1) {
+                if (angle_diff > best_max_diff) {
+                    best_max_diff = angle_diff;
+                    best_profile = current_profile;
+                    free(best_filename);
+                    best_filename = strdup(current_filename);
+                }
+            }
+        }
 
         free(line);
         line = NULL;
@@ -124,55 +72,13 @@ int find_max_angle_difference(const char *result_file_path, const char *output_f
 
     // 檢查是否是因為錯誤而結束讀取
     if (ferror(input_file)) {
-        g_printerr("Error: Error reading result file '%s'\n", result_file_path);
+        g_printerr("Error: Error reading analysis result file '%s'\n", analysis_result_file_path);
         goto cleanup;
     }
 
-    if (data_count == 0) {
-        g_printerr("Warning: No valid data found in result file '%s'\n", result_file_path);
+    if (!best_filename) {
+        g_printerr("Warning: No file results found in analysis result file '%s'\n", analysis_result_file_path);
         goto cleanup;
-    }
-
-    // 排序資料以便分組處理
-    qsort(data_array, data_count, sizeof(MaxAngleData), compare_angle_data);
-
-    // 找出每個 profile 的最大角度差值
-    double global_max_diff = 0.0;
-    int best_profile = -1;
-    double best_min_angle = 0.0, best_max_angle = 0.0;
-    int best_min_bin = -1, best_max_bin = -1;
-
-    int i = 0;
-    while (i < data_count) {
-        int current_profile = data_array[i].profile;
-        double min_angle = data_array[i].angle;
-        double max_angle = data_array[i].angle;
-        int min_bin = data_array[i].bin;
-        int max_bin = data_array[i].bin;
-
-        // 處理同一 profile 的所有資料
-        while (i < data_count && data_array[i].profile == current_profile) {
-            if (data_array[i].angle < min_angle) {
-                min_angle = data_array[i].angle;
-                min_bin = data_array[i].bin;
-            }
-            if (data_array[i].angle > max_angle) {
-                max_angle = data_array[i].angle;
-                max_bin = data_array[i].bin;
-            }
-            i++;
-        }
-
-        // 計算這個 profile 的角度差值
-        double angle_diff = max_angle - min_angle;
-        if (angle_diff > global_max_diff) {
-            global_max_diff = angle_diff;
-            best_profile = current_profile;
-            best_min_angle = min_angle;
-            best_max_angle = max_angle;
-            best_min_bin = min_bin;
-            best_max_bin = max_bin;
-        }
     }
 
     // 寫入結果檔案
@@ -183,35 +89,11 @@ int find_max_angle_difference(const char *result_file_path, const char *output_f
         goto cleanup;
     }
 
-    // 檢查每個 fprintf 的返回值
-    if (fprintf(output_file, "Maximum Angle Difference Analysis Results\n") < 0) {
-        g_printerr("Error: Failed to write header to output file '%s'\n", output_file_path);
-        goto cleanup;
-    }
-    if (fprintf(output_file, "=========================================\n") < 0) {
-        g_printerr("Error: Failed to write separator to output file '%s'\n", output_file_path);
-        goto cleanup;
-    }
-    if (fprintf(output_file, "Profile with maximum angle difference: %d\n", best_profile) < 0) {
-        g_printerr("Error: Failed to write profile to output file '%s'\n", output_file_path);
-        goto cleanup;
-    }
-    if (fprintf(output_file, "Angle difference: %.6f\n", global_max_diff) < 0) {
-        g_printerr("Error: Failed to write angle difference to output file '%s'\n", output_file_path);
-        goto cleanup;
-    }
-    if (fprintf(output_file, "Min angle: %.6f (bin %d)\n", best_min_angle, best_min_bin) < 0) {
-        g_printerr("Error: Failed to write min angle to output file '%s'\n", output_file_path);
-        goto cleanup;
-    }
-    if (fprintf(output_file, "Max angle: %.6f (bin %d)\n", best_max_angle, best_max_bin) < 0) {
-        g_printerr("Error: Failed to write max angle to output file '%s'\n", output_file_path);
-        goto cleanup;
-    }
-    if (fprintf(output_file, "Bin range: %d ~ %d\n", best_min_bin, best_max_bin) < 0) {
-        g_printerr("Error: Failed to write bin range to output file '%s'\n", output_file_path);
-        goto cleanup;
-    }
+    fprintf(output_file, "Global Maximum Angle Difference Analysis Result\n");
+    fprintf(output_file, "===============================================\n");
+    fprintf(output_file, "File with maximum angle difference: %s\n", best_filename);
+    fprintf(output_file, "Profile with maximum angle difference: %d\n", best_profile);
+    fprintf(output_file, "Maximum angle difference: %.6f\n", best_max_diff);
 
     success = 1;
 
@@ -219,17 +101,14 @@ cleanup:
     if (line) {
         free(line);
     }
+    free(current_filename);
+    free(best_filename);
     if (input_file) {
         fclose(input_file);
     }
     if (output_file) {
-        if (fclose(output_file) != 0 && success) {
-            g_printerr("Error: Failed to close output file '%s': %s\n",
-                      output_file_path, strerror(errno));
-            success = 0;
-        }
+        fclose(output_file);
     }
-    free(data_array);
 
     return success;
 }
