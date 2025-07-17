@@ -6,6 +6,11 @@
 #include <gtk/gtk.h>
 #include "angle_parser.h"
 #include "scan.h"
+#include "safe_getline.h"
+
+// 全局 mutex 保護 hash table 操作
+static GMutex angle_parser_mutex;
+static gboolean mutex_initialized = FALSE;
 
 // 靜態函數聲明
 static int is_result_file(const char *filename);
@@ -13,6 +18,15 @@ static int expand_angle_range_array(AngleAnalysisResult *result);
 static AngleAnalysisResult init_angle_analysis_result(void);
 static int parse_angle_line(const char *line, AngleData *data);
 static void update_angle_range(GHashTable *ranges_table, const AngleData *data);
+static void ensure_mutex_initialized(void);
+
+// 確保 mutex 初始化
+static void ensure_mutex_initialized(void) {
+    if (!mutex_initialized) {
+        g_mutex_init(&angle_parser_mutex);
+        mutex_initialized = TRUE;
+    }
+}
 
 // 檢查檔案名稱是否為結果檔案
 static int is_result_file(const char *filename) {
@@ -67,6 +81,10 @@ static int parse_angle_line(const char *line, AngleData *data) {
 
     // 嘗試解析三個數字
     int parsed = sscanf(line, "%d %d %lf", &data->first_num, &data->second_num, &data->third_num);
+    if (parsed == EOF) {
+        g_printerr("Warning: EOF encountered while parsing line\n");
+        return 0;
+    }
     if (parsed != 3) {
         // 詳細錯誤報告
         g_printerr("Warning: Failed to parse line (got %d/3 fields): %.50s\n", parsed, line);
@@ -80,19 +98,30 @@ static int parse_angle_line(const char *line, AngleData *data) {
         return 0;
     }
 
+    // 檢查 NaN 和無限值
+    if (!isfinite(data->third_num)) {
+        g_printerr("Warning: Invalid angle value (NaN/Inf) in line: %d %d %f\n",
+                  data->first_num, data->second_num, data->third_num);
+        return 0;
+    }
+
     return 1;
 }
 
-// 更新角度範圍表
+// 更新角度範圍表（thread-safe）
 static void update_angle_range(GHashTable *ranges_table, const AngleData *data) {
     if (!ranges_table || !data) {
         g_printerr("Error: update_angle_range called with NULL parameters\n");
         return;
     }
 
+    ensure_mutex_initialized();
+    g_mutex_lock(&angle_parser_mutex);
+
     gint *key = g_new(gint, 1);
     if (!key) {
         g_printerr("Error: Failed to allocate memory for hash key\n");
+        g_mutex_unlock(&angle_parser_mutex);
         return;
     }
     *key = data->first_num;
@@ -104,6 +133,7 @@ static void update_angle_range(GHashTable *ranges_table, const AngleData *data) 
         if (!new_range) {
             g_printerr("Error: Failed to allocate memory for new angle range\n");
             g_free(key);
+            g_mutex_unlock(&angle_parser_mutex);
             return;
         }
 
@@ -129,13 +159,16 @@ static void update_angle_range(GHashTable *ranges_table, const AngleData *data) 
         // 更新角度差值
         existing->angle_diff = fabs(existing->max_third - existing->min_third);
     }
+
+    g_mutex_unlock(&angle_parser_mutex);
 }
 
 // 解析單個 TXT 檔案中的角度資料
 AngleAnalysisResult parse_angle_file(const char *file_path) {
     AngleAnalysisResult result = init_angle_analysis_result();
     FILE *file = NULL;
-    char line[1024];  // 使用固定大小緩衝區
+    char *line = NULL;
+    GHashTable *ranges_table = NULL;
 
     if (!file_path) {
         result.error = g_strdup("檔案路徑為空");
@@ -150,7 +183,7 @@ AngleAnalysisResult parse_angle_file(const char *file_path) {
         goto cleanup;
     }
 
-    GHashTable *ranges_table = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, g_free);
+    ranges_table = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, g_free);
     if (!ranges_table) {
         result.error = g_strdup("無法創建雜湊表");
         g_printerr("Error: Failed to create hash table\n");
@@ -158,20 +191,22 @@ AngleAnalysisResult parse_angle_file(const char *file_path) {
     }
 
     int line_number = 0;
-    while (fgets(line, sizeof(line), file) != NULL) {
+    while ((line = safe_getline(file)) != NULL) {
         line_number++;
 
         AngleData data;
         if (parse_angle_line(line, &data)) {
             update_angle_range(ranges_table, &data);
         }
+
+        free(line);
+        line = NULL;
     }
 
     // 檢查是否是因為錯誤而結束
     if (ferror(file)) {
         result.error = g_strdup_printf("讀取檔案時發生錯誤: %s", file_path);
         g_printerr("Error: Error reading file '%s'\n", file_path);
-        g_hash_table_destroy(ranges_table);
         goto cleanup;
     }
 
@@ -192,12 +227,17 @@ AngleAnalysisResult parse_angle_file(const char *file_path) {
         result.count++;
     }
 
-    g_hash_table_destroy(ranges_table);
     result.success = (result.error == NULL);
 
 cleanup:
+    if (line) {
+        free(line);
+    }
     if (file) {
         fclose(file);
+    }
+    if (ranges_table) {
+        g_hash_table_destroy(ranges_table);
     }
 
     return result;
@@ -217,6 +257,7 @@ AngleAnalysisResult process_angle_files_with_progress(const char *folder_path,
     ScanResult scan_result = {0};
     GHashTable *all_ranges = NULL;
     FILE *output = NULL;
+    gchar *output_path = NULL;
 
     if (!folder_path || !output_file) {
         final_result.error = g_strdup("資料夾路徑或輸出檔案名稱為空");
@@ -227,7 +268,7 @@ AngleAnalysisResult process_angle_files_with_progress(const char *folder_path,
     // 掃描 TXT 檔案
     scan_result = scan_txt_files(folder_path);
     if (!scan_result.success) {
-        final_result.error = g_strdup_printf("掃描資料夾失敗: %s", scan_result.error);
+        final_result.error = g_strdup_printf("掃描資料夾失敗: %s", scan_result.error ? scan_result.error : "未知錯誤");
         goto cleanup;
     }
 
@@ -322,7 +363,7 @@ AngleAnalysisResult process_angle_files_with_progress(const char *folder_path,
     }
 
     // 寫入結果檔案
-    gchar *output_path = g_build_filename(folder_path, output_file, NULL);
+    output_path = g_build_filename(folder_path, output_file, NULL);
     if (!output_path) {
         final_result.error = g_strdup("無法建構輸出檔案路徑");
         g_printerr("Error: Failed to build output file path\n");
@@ -333,30 +374,37 @@ AngleAnalysisResult process_angle_files_with_progress(const char *folder_path,
     if (!output) {
         final_result.error = g_strdup_printf("無法創建輸出檔案: %s", output_path);
         g_printerr("Error: Failed to create output file '%s': %s\n", output_path, strerror(errno));
-        g_free(output_path);
         goto cleanup;
     }
 
     for (int i = 0; i < final_result.count; i++) {
         AngleRange *range = &final_result.ranges[i];
-        if (fprintf(output, "%d %d %.6f\n", range->first_num, range->min_second, range->min_third) < 0 ||
-            fprintf(output, "%d %d %.6f\n", range->first_num, range->max_second, range->max_third) < 0) {
+        if (fprintf(output, "%d %d %.6f\n", range->first_num, range->min_second, range->min_third) < 0) {
             final_result.error = g_strdup("寫入輸出檔案失敗");
             g_printerr("Error: Failed to write to output file '%s'\n", output_path);
-            g_free(output_path);
+            goto cleanup;
+        }
+        if (fprintf(output, "%d %d %.6f\n", range->first_num, range->max_second, range->max_third) < 0) {
+            final_result.error = g_strdup("寫入輸出檔案失敗");
+            g_printerr("Error: Failed to write to output file '%s'\n", output_path);
             goto cleanup;
         }
     }
 
-    g_free(output_path);
     final_result.success = 1;
 
 cleanup:
     if (output) {
-        fclose(output);
+        if (fclose(output) != 0 && final_result.success) {
+            final_result.error = g_strdup("無法正確關閉輸出檔案");
+            final_result.success = 0;
+        }
     }
     if (all_ranges) {
         g_hash_table_destroy(all_ranges);
+    }
+    if (output_path) {
+        g_free(output_path);
     }
     free_scan_result(&scan_result);
 

@@ -2,20 +2,15 @@
 #include "ui.h"
 #include "callbacks.h"
 
-// 應用程序啟動時的回調函數
-void activate(GtkApplication *app, gpointer user_data) {
-    AppState *state = (AppState *)user_data;
+// 靜態函數聲明
+static void build_ui(AppState *state);
 
-    if (!state) {
-        g_printerr("Error: activate called with NULL state\n");
+// 構建用戶界面
+static void build_ui(AppState *state) {
+    if (!state || !state->window) {
+        g_printerr("Error: build_ui called with invalid state\n");
         return;
     }
-
-    // 創建主窗口
-    state->window = gtk_application_window_new(app);
-    gtk_window_set_title(GTK_WINDOW(state->window), "TXT 檔案處理工具");
-    gtk_window_set_default_size(GTK_WINDOW(state->window), 800, 600);
-    gtk_window_set_position(GTK_WINDOW(state->window), GTK_WIN_POS_CENTER);
 
     // 創建主容器（垂直盒子）
     GtkWidget *main_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
@@ -52,6 +47,13 @@ void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_size_request(angle_button, 150, 40);
     g_signal_connect(angle_button, "clicked", G_CALLBACK(on_analyze_angles), state);
     gtk_box_pack_start(GTK_BOX(button_hbox), angle_button, FALSE, FALSE, 0);
+
+    // 創建取消按鈕（初始隱藏）
+    state->cancel_button = gtk_button_new_with_label("取消");
+    gtk_widget_set_size_request(state->cancel_button, 80, 40);
+    g_signal_connect(state->cancel_button, "clicked", G_CALLBACK(on_cancel_processing), state);
+    gtk_box_pack_start(GTK_BOX(button_hbox), state->cancel_button, FALSE, FALSE, 0);
+    gtk_widget_hide(state->cancel_button);
 
     // 創建狀態標籤
     state->status_label = gtk_label_new("請選擇一個包含 TXT 檔案的資料夾");
@@ -98,9 +100,37 @@ void activate(GtkApplication *app, gpointer user_data) {
 
     gtk_container_add(GTK_CONTAINER(scrolled_window), state->result_text_view);
     gtk_box_pack_start(GTK_BOX(main_vbox), scrolled_window, TRUE, TRUE, 0);
+}
 
-    // 顯示所有元件
+// 應用程序啟動時的回調函數
+void activate(GtkApplication *app, gpointer user_data) {
+    AppState *state = (AppState *)user_data;
+
+    if (!state) {
+        g_printerr("Error: activate called with NULL state\n");
+        return;
+    }
+
+    // 創建主窗口
+    state->window = gtk_application_window_new(app);
+    if (!state->window) {
+        g_printerr("Error: Failed to create application window\n");
+        return;
+    }
+
+    gtk_window_set_title(GTK_WINDOW(state->window), "TXT 檔案處理工具");
+    gtk_window_set_default_size(GTK_WINDOW(state->window), 800, 600);
+    gtk_window_set_position(GTK_WINDOW(state->window), GTK_WIN_POS_CENTER);
+
+    // 構建界面
+    build_ui(state);
+
+    // 顯示所有控件
     gtk_widget_show_all(state->window);
+
+    // 隱藏進度容器和取消按鈕（因為 show_all 會顯示所有控件）
+    gtk_widget_hide(state->progress_container);
+    gtk_widget_hide(state->cancel_button);
 }
 
 // 清理 AppState 的函數

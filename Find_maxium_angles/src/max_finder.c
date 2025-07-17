@@ -2,8 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <math.h>
 #include <gtk/gtk.h>
 #include "max_finder.h"
+#include "safe_getline.h"
 
 // 靜態函數聲明
 static int parse_result_line(const char *line, MaxAngleData *data);
@@ -23,6 +25,10 @@ static int parse_result_line(const char *line, MaxAngleData *data) {
 
     // 嘗試解析三個數字
     int parsed = sscanf(line, "%d %d %lf", &data->profile, &data->bin, &data->angle);
+    if (parsed == EOF) {
+        g_printerr("Warning: EOF encountered while parsing line\n");
+        return 0;
+    }
     if (parsed != 3) {
         g_printerr("Warning: Failed to parse result line (got %d/3 fields): %.50s\n", parsed, line);
         return 0;
@@ -31,6 +37,13 @@ static int parse_result_line(const char *line, MaxAngleData *data) {
     // 基本有效性檢查
     if (data->profile < 0 || data->bin < 0) {
         g_printerr("Warning: Invalid negative values in result line: %d %d %f\n",
+                  data->profile, data->bin, data->angle);
+        return 0;
+    }
+
+    // 檢查 NaN 和無限值
+    if (!isfinite(data->angle)) {
+        g_printerr("Warning: Invalid angle value (NaN/Inf) in result line: %d %d %f\n",
                   data->profile, data->bin, data->angle);
         return 0;
     }
@@ -58,7 +71,7 @@ static int compare_angle_data(const void *a, const void *b) {
 int find_max_angle_difference(const char *result_file_path, const char *output_file_path) {
     FILE *input_file = NULL;
     FILE *output_file = NULL;
-    char line[1024];  // 使用固定大小緩衝區
+    char *line = NULL;
     MaxAngleData *data_array = NULL;
     int data_count = 0;
     int data_capacity = 0;
@@ -79,11 +92,13 @@ int find_max_angle_difference(const char *result_file_path, const char *output_f
 
     // 讀取所有資料
     int line_number = 0;
-    while (fgets(line, sizeof(line), input_file) != NULL) {
+    while ((line = safe_getline(input_file)) != NULL) {
         line_number++;
 
         MaxAngleData data;
         if (!parse_result_line(line, &data)) {
+            free(line);
+            line = NULL;
             continue;
         }
 
@@ -93,6 +108,7 @@ int find_max_angle_difference(const char *result_file_path, const char *output_f
             MaxAngleData *new_array = realloc(data_array, new_capacity * sizeof(MaxAngleData));
             if (!new_array) {
                 g_printerr("Error: Failed to expand data array to %d items\n", new_capacity);
+                free(line);
                 goto cleanup;
             }
             data_array = new_array;
@@ -101,6 +117,9 @@ int find_max_angle_difference(const char *result_file_path, const char *output_f
 
         data_array[data_count] = data;
         data_count++;
+
+        free(line);
+        line = NULL;
     }
 
     // 檢查是否是因為錯誤而結束讀取
@@ -164,25 +183,51 @@ int find_max_angle_difference(const char *result_file_path, const char *output_f
         goto cleanup;
     }
 
-    if (fprintf(output_file, "Maximum Angle Difference Analysis Results\n") < 0 ||
-        fprintf(output_file, "=========================================\n") < 0 ||
-        fprintf(output_file, "Profile with maximum angle difference: %d\n", best_profile) < 0 ||
-        fprintf(output_file, "Angle difference: %.6f\n", global_max_diff) < 0 ||
-        fprintf(output_file, "Min angle: %.6f (bin %d)\n", best_min_angle, best_min_bin) < 0 ||
-        fprintf(output_file, "Max angle: %.6f (bin %d)\n", best_max_angle, best_max_bin) < 0 ||
-        fprintf(output_file, "Bin range: %d ~ %d\n", best_min_bin, best_max_bin) < 0) {
-        g_printerr("Error: Failed to write to output file '%s'\n", output_file_path);
+    // 檢查每個 fprintf 的返回值
+    if (fprintf(output_file, "Maximum Angle Difference Analysis Results\n") < 0) {
+        g_printerr("Error: Failed to write header to output file '%s'\n", output_file_path);
+        goto cleanup;
+    }
+    if (fprintf(output_file, "=========================================\n") < 0) {
+        g_printerr("Error: Failed to write separator to output file '%s'\n", output_file_path);
+        goto cleanup;
+    }
+    if (fprintf(output_file, "Profile with maximum angle difference: %d\n", best_profile) < 0) {
+        g_printerr("Error: Failed to write profile to output file '%s'\n", output_file_path);
+        goto cleanup;
+    }
+    if (fprintf(output_file, "Angle difference: %.6f\n", global_max_diff) < 0) {
+        g_printerr("Error: Failed to write angle difference to output file '%s'\n", output_file_path);
+        goto cleanup;
+    }
+    if (fprintf(output_file, "Min angle: %.6f (bin %d)\n", best_min_angle, best_min_bin) < 0) {
+        g_printerr("Error: Failed to write min angle to output file '%s'\n", output_file_path);
+        goto cleanup;
+    }
+    if (fprintf(output_file, "Max angle: %.6f (bin %d)\n", best_max_angle, best_max_bin) < 0) {
+        g_printerr("Error: Failed to write max angle to output file '%s'\n", output_file_path);
+        goto cleanup;
+    }
+    if (fprintf(output_file, "Bin range: %d ~ %d\n", best_min_bin, best_max_bin) < 0) {
+        g_printerr("Error: Failed to write bin range to output file '%s'\n", output_file_path);
         goto cleanup;
     }
 
     success = 1;
 
 cleanup:
+    if (line) {
+        free(line);
+    }
     if (input_file) {
         fclose(input_file);
     }
     if (output_file) {
-        fclose(output_file);
+        if (fclose(output_file) != 0 && success) {
+            g_printerr("Error: Failed to close output file '%s': %s\n",
+                      output_file_path, strerror(errno));
+            success = 0;
+        }
     }
     free(data_array);
 

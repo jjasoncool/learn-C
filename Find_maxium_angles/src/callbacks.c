@@ -31,6 +31,45 @@ static gpointer angle_analysis_thread(gpointer data);
 static gboolean angle_analysis_finished(gpointer data);
 static void free_async_process_data(AsyncProcessData *data);
 
+// 初始化應用狀態
+void init_app_state(AppState *state) {
+    if (!state) return;
+
+    memset(state, 0, sizeof(AppState));
+    g_mutex_init(&state->cancel_mutex);
+    state->cancel_requested = FALSE;
+    state->is_processing = FALSE;
+}
+
+// 清理應用狀態
+void cleanup_app_state(AppState *state) {
+    if (!state) return;
+
+    g_free(state->selected_folder_path);
+    g_mutex_clear(&state->cancel_mutex);
+    memset(state, 0, sizeof(AppState));
+}
+
+// 檢查是否請求取消
+gboolean is_cancel_requested(AppState *state) {
+    if (!state) return FALSE;
+
+    g_mutex_lock(&state->cancel_mutex);
+    gboolean result = state->cancel_requested;
+    g_mutex_unlock(&state->cancel_mutex);
+
+    return result;
+}
+
+// 設定取消請求
+void set_cancel_requested(AppState *state, gboolean cancel) {
+    if (!state) return;
+
+    g_mutex_lock(&state->cancel_mutex);
+    state->cancel_requested = cancel;
+    g_mutex_unlock(&state->cancel_mutex);
+}
+
 // 在主執行緒中更新進度 UI
 static gboolean update_progress_ui(gpointer data) {
     ProgressUpdateData *update_data = (ProgressUpdateData *)data;
@@ -50,6 +89,11 @@ static gboolean update_progress_ui(gpointer data) {
 static void progress_callback(int current, int total, const char *filename, void *user_data) {
     AsyncProcessData *async_data = (AsyncProcessData *)user_data;
     AppState *state = async_data->app_state;
+
+    // 檢查是否請求取消
+    if (is_cancel_requested(state)) {
+        return; // 不再發送進度更新
+    }
 
     // 計算進度百分比
     double progress = (double)current / total;
@@ -77,6 +121,14 @@ static void progress_callback(int current, int total, const char *filename, void
 static gpointer angle_analysis_thread(gpointer data) {
     AsyncProcessData *async_data = (AsyncProcessData *)data;
 
+    // 檢查是否在開始前就請求取消
+    if (is_cancel_requested(async_data->app_state)) {
+        async_data->result.success = 0;
+        async_data->result.error = g_strdup("操作已取消");
+        g_idle_add(angle_analysis_finished, async_data);
+        return NULL;
+    }
+
     // 執行角度分析（帶進度回調）
     async_data->result = process_angle_files_with_progress(
         async_data->folder_path,
@@ -85,19 +137,36 @@ static gpointer angle_analysis_thread(gpointer data) {
         async_data
     );
 
+    // 檢查是否在分析過程中請求取消
+    if (is_cancel_requested(async_data->app_state)) {
+        // 清理已分配的結果
+        free_angle_analysis_result(&async_data->result);
+        async_data->result.success = 0;
+        async_data->result.error = g_strdup("操作已取消");
+        g_idle_add(angle_analysis_finished, async_data);
+        return NULL;
+    }
+
     // 如果角度分析成功，執行最大角度搜尋
     if (async_data->result.success) {
         gchar *result_file_path = g_build_filename(async_data->folder_path, "angle_analysis_result.txt", NULL);
         if (result_file_path) {
             async_data->max_result_file_path = g_build_filename(async_data->folder_path, "max_angle_result.txt", NULL);
             if (async_data->max_result_file_path) {
-                async_data->max_search_success = find_max_angle_difference(result_file_path, async_data->max_result_file_path);
+                // 再次檢查取消請求
+                if (!is_cancel_requested(async_data->app_state)) {
+                    async_data->max_search_success = find_max_angle_difference(result_file_path, async_data->max_result_file_path);
+                } else {
+                    async_data->max_search_success = 0;
+                }
             } else {
                 g_printerr("Error: Failed to build max result file path\n");
+                async_data->max_search_success = 0;
             }
             g_free(result_file_path);
         } else {
             g_printerr("Error: Failed to build result file path\n");
+            async_data->max_search_success = 0;
         }
     }
 
@@ -312,6 +381,9 @@ void on_analyze_angles(GtkWidget *widget, gpointer data) {
         return;
     }
 
+    // 重置取消標記
+    set_cancel_requested(state, FALSE);
+
     // 設定處理狀態
     set_processing_state(state, TRUE);
     gtk_label_set_text(GTK_LABEL(state->status_label), "開始角度分析...");
@@ -352,6 +424,20 @@ void on_analyze_angles(GtkWidget *widget, gpointer data) {
     g_thread_unref(thread); // 讓執行緒自動清理
 }
 
+// 取消處理的回調函數
+void on_cancel_processing(GtkWidget *widget, gpointer data) {
+    (void)widget;  // 壓制警告
+    AppState *state = (AppState *)data;
+
+    if (!state->is_processing) {
+        return; // 沒有正在進行的處理
+    }
+
+    // 設定取消請求
+    set_cancel_requested(state, TRUE);
+    gtk_label_set_text(GTK_LABEL(state->status_label), "正在取消處理...");
+}
+
 // 設定處理狀態
 void set_processing_state(AppState *state, gboolean processing) {
     if (!state) {
@@ -364,12 +450,16 @@ void set_processing_state(AppState *state, gboolean processing) {
     // 控制按鈕是否可用
     gtk_widget_set_sensitive(state->folder_button, !processing);
 
-    // 顯示或隱藏進度條
+    // 顯示或隱藏進度條和取消按鈕
     if (processing) {
         gtk_widget_show(state->progress_container);
+        gtk_widget_show(state->cancel_button);
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(state->progress_bar), 0.0);
         gtk_label_set_text(GTK_LABEL(state->progress_label), "準備開始處理...");
     } else {
         gtk_widget_hide(state->progress_container);
+        gtk_widget_hide(state->cancel_button);
+        // 重置取消標記
+        set_cancel_requested(state, FALSE);
     }
 }

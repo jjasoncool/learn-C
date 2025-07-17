@@ -82,6 +82,7 @@ ScanResult scan_txt_files(const char *folder_path) {
         if (error) {
             g_error_free(error);
         }
+        result.success = 0; // 明確設定失敗
         return result;
     }
 

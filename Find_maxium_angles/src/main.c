@@ -13,13 +13,15 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Error: Failed to allocate AppState\n");
         return 1;
     }
-    memset(state, 0, sizeof(AppState));  // 清零以避免垃圾
-    state->is_processing = FALSE;  // 初始化處理狀態
+
+    // 初始化應用狀態
+    init_app_state(state);
 
     app = gtk_application_new("com.example.txtprocessor", G_APPLICATION_DEFAULT_FLAGS);
     if (!app) {
         fprintf(stderr, "Error: Failed to create GTK application\n");
-        free_app_state(state);
+        cleanup_app_state(state);
+        free(state);
         return 1;
     }
 
@@ -27,7 +29,8 @@ int main(int argc, char **argv) {
     status = g_application_run(G_APPLICATION(app), argc, argv);
 
     // 清理
-    free_app_state(state);
+    cleanup_app_state(state);
+    free(state);
     g_object_unref(app);
     return status;
 }
