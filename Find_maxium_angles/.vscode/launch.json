@@ -8,7 +8,7 @@
             "request": "launch",                                     // 啟動程式進行除錯
             "program": "${workspaceFolder}/build/txt_processor_debug.exe", // 要除錯的執行檔 (除錯版本)
             "args": [],                                              // 傳遞給程式的參數
-            "stopAtEntry": false,                                    // 是否在 main() 函數開始時暫停
+            "stopAtEntry": true,                                     // 在 main() 函數開始時暫停
             "cwd": "${workspaceFolder}",                             // 工作目錄
             "environment": [],                                       // 環境變數
             "externalConsole": false,                                // 在 VS Code 內建終端機執行

@@ -7,9 +7,17 @@
             "includePath": [
                 "${workspaceFolder}/include",    // 我們專案的標頭檔
                 "${workspaceFolder}/src",        // 我們專案的原始碼
-                // Windows 特定的 GTK 路徑 (如果需要的話可以加回來)
-                // "C:/msys64/mingw64/include/gtk-3.0",
-                // "C:/msys64/mingw64/include/glib-2.0"
+                // Windows 特定的 GTK 路徑
+                "C:/msys64/mingw64/include/gtk-3.0",
+                "C:/msys64/mingw64/include/glib-2.0",
+                "C:/msys64/mingw64/lib/glib-2.0/include",
+                "C:/msys64/mingw64/include/pango-1.0",
+                "C:/msys64/mingw64/include/atk-1.0",
+                "C:/msys64/mingw64/include/cairo",
+                "C:/msys64/mingw64/include/gdk-pixbuf-2.0",
+                "C:/msys64/mingw64/include",
+                "C:/msys64/mingw64/include/freetype2",
+                "C:/msys64/mingw64/include/harfbuzz"
             ],
             // 指定使用的 C 編譯器
             "compilerPath": "C:/msys64/mingw64/bin/gcc.exe",

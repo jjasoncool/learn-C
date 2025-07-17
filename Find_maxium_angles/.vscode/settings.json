@@ -16,5 +16,12 @@
     },
 
     // 告訴 VS Code 哪裡找到 C 編譯器
-    "C_Cpp.default.compilerPath": "C:\\msys64\\mingw64\\bin\\gcc.exe"
+    "C_Cpp.default.compilerPath": "C:\\msys64\\mingw64\\bin\\gcc.exe",
+    // 透過 files.associations 強制告訴 VS Code：
+    "files.associations": {
+        // 當遇到名為 chrono 的檔案時，將其視為 C 語言檔案
+        "chrono": "c",
+        // 當遇到名為 functional 的檔案時，將其視為 C 語言檔案
+        "functional": "c"
+    }
 }

@@ -1,11 +1,11 @@
 #ifndef FILE_PROCESSOR_H
 #define FILE_PROCESSOR_H
 
-#include <gtk/gtk.h>
+#include <gtk/gtk.h>  // 既然用 GTK，包含 glib 相關
 
 // 檔案資訊結構
 typedef struct {
-    char name[256];
+    char *name;  // 動態分配，別固定大小
     double size_kb;
 } FileInfo;
 
@@ -14,7 +14,7 @@ typedef struct {
     FileInfo *files;
     int count;
     int capacity;
-    char error_message[512];
+    char *error;  // 動態分配的錯誤訊息
     int success;
 } ScanResult;
 
@@ -33,6 +33,14 @@ ScanResult scan_txt_files(const char *folder_path);
  * @param buffer_size 緩衝區大小
  */
 void format_scan_result(const ScanResult *result, const char *folder_path, char *buffer, size_t buffer_size);
+
+/**
+ * 將掃描結果格式化為 GString（更安全的動態字串版本）
+ * @param result 掃描結果
+ * @param folder_path 資料夾路徑
+ * @param output_string 輸出的 GString
+ */
+void format_scan_result_gstring(const ScanResult *result, const char *folder_path, GString *output_string);
 
 /**
  * 釋放掃描結果的記憶體
