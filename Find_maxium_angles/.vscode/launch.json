@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // C 程式除錯設定
+            "name": "除錯 TXT 處理器",
+            "type": "cppdbg",                                        // C/C++ 除錯類型
+            "request": "launch",                                     // 啟動程式進行除錯
+            "program": "${workspaceFolder}/build/txt_processor_debug.exe", // 要除錯的執行檔 (除錯版本)
+            "args": [],                                              // 傳遞給程式的參數
+            "stopAtEntry": false,                                    // 是否在 main() 函數開始時暫停
+            "cwd": "${workspaceFolder}",                             // 工作目錄
+            "environment": [],                                       // 環境變數
+            "externalConsole": false,                                // 在 VS Code 內建終端機執行
+            "MIMode": "gdb",                                         // 使用 GDB 除錯器
+            "miDebuggerPath": "C:/msys64/mingw64/bin/gdb.exe",      // GDB 執行檔路徑
+            "setupCommands": [
+                {
+                    "description": "啟用 GDB 的美化輸出",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "編譯除錯版"                             // 除錯前先執行編譯除錯版任務
+        }
+    ]
+}

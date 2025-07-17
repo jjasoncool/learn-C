@@ -1,19 +1,20 @@
 {
+    // 設定預設終端機為 MSYS2 (包含 gcc 編譯器)
+    "terminal.integrated.defaultProfile.windows": "MSYS2 Bash",
+
+    // 定義終端機設定檔
     "terminal.integrated.profiles.windows": {
         "MSYS2 Bash": {
             "path": "C:\\msys64\\usr\\bin\\bash.exe",
-            "args": [
-                "--login",
-                "-i"
-            ],
+            "args": ["--login", "-i"],
             "env": {
                 "MSYSTEM": "MINGW64",
-                "CHERE_INVOKING": "1",
-                "MSYS2_PATH_TYPE": "inherit"
+                "CHERE_INVOKING": "1",         // 在當前目錄啟動終端機（而不是 MSYS2 家目錄）
+                "MSYS2_PATH_TYPE": "inherit"   // 繼承 Windows PATH，可使用 Windows 程式
             }
-        },
-        "Git Bash": {
-            "source": "Git Bash"
         }
-    }
+    },
+
+    // 告訴 VS Code 哪裡找到 C 編譯器
+    "C_Cpp.default.compilerPath": "C:\\msys64\\mingw64\\bin\\gcc.exe"
 }

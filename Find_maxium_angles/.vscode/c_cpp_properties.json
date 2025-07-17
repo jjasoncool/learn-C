@@ -1,0 +1,45 @@
+{
+    "configurations": [
+        {
+            // Windows 平台設定 (MSYS2/MinGW64)
+            "name": "Win32",
+            // 告訴 VS Code 去哪裡找標頭檔 (.h 檔案)
+            "includePath": [
+                "${workspaceFolder}/include",    // 我們專案的標頭檔
+                "${workspaceFolder}/src",        // 我們專案的原始碼
+                // Windows 特定的 GTK 路徑 (如果需要的話可以加回來)
+                // "C:/msys64/mingw64/include/gtk-3.0",
+                // "C:/msys64/mingw64/include/glib-2.0"
+            ],
+            // 指定使用的 C 編譯器
+            "compilerPath": "C:/msys64/mingw64/bin/gcc.exe",
+            // 使用 C99 標準 (現代 C 語言標準)
+            "cStandard": "c99",
+            // 告訴 VS Code 使用 GCC 的語法檢查
+            "intelliSenseMode": "gcc-x64"
+        },
+        {
+            // Linux 平台設定
+            "name": "Linux",
+            // 標頭檔路徑 (Linux 版本)
+            "includePath": [
+                "${workspaceFolder}/include",
+                "${workspaceFolder}/src",
+                // Linux 常見的系統標頭檔路徑
+                "/usr/include",
+                "/usr/local/include",
+                // GTK 在 Linux 的常見路徑 (pkg-config 會自動處理)
+                "/usr/include/gtk-3.0",
+                "/usr/include/glib-2.0",
+                "/usr/lib/x86_64-linux-gnu/glib-2.0/include"
+            ],
+            // Linux 的 GCC 編譯器路徑
+            "compilerPath": "/usr/bin/gcc",
+            // 使用 C99 標準
+            "cStandard": "c99",
+            // Linux 的 GCC 語法檢查
+            "intelliSenseMode": "gcc-x64"
+        }
+    ],
+    "version": 4
+}

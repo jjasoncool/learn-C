@@ -1,53 +1,102 @@
 # TXT 檔案處理工具
 
-這是一個使用 GTK3 開發的 C 語言程序，用於處理資料夾中的 TXT 檔案。
+一個使用 C 語言和 GTK3 開發的圖形化 TXT 檔案掃描工具。
 
-## 功能特性
+## 專案結構
 
-- 圖形化界面，使用 GTK3
-- 選擇資料夾功能
-- 讀取資料夾中的所有 TXT 檔案（功能開發中）
-- 顯示處理結果（功能開發中）
+```
+Find_maxium_angles/
+├── src/                    # 原始碼檔案
+│   ├── main.c             # 主程式 (GTK 界面)
+│   └── file_processor.c   # 檔案處理模組實作
+├── include/               # 標頭檔
+│   └── file_processor.h   # 檔案處理模組介面
+├── build/                 # 編譯產物 (自動產生)
+│   ├── main.o            # 主程式物件檔
+│   ├── file_processor.o  # 檔案處理模組物件檔
+│   └── txt_processor.exe # 最終執行檔
+├── test_data/            # 測試資料
+│   ├── sample1.txt       # 中文測試檔案
+│   ├── english_sample.txt # 英文測試檔案
+│   ├── empty_test.txt    # 小檔案測試
+│   ├── large_file.txt    # 大檔案測試
+│   └── README.md         # 測試資料說明
+├── scripts/              # 腳本檔案
+│   ├── install_gtk.sh    # GTK 環境安裝腳本
+│   └── test_compile.sh   # 編譯測試腳本
+├── docs/                 # 文件 (將來使用)
+├── Makefile              # 建置設定
+├── README.md             # 專案說明 (本檔案)
+└── .gitignore           # Git 忽略清單
+```
 
-## 環境需求
+## 功能特色
 
-### Windows 環境設置
+- 🔍 掃描指定資料夾中的所有 TXT 檔案
+- 📊 顯示檔案名稱和大小統計
+- 🖥️ 現代化 GTK3 圖形界面
+- 🧩 模組化程式設計
+- 🛡️ 完善的錯誤處理
 
-1. **安裝 MSYS2**
-   - 從 https://www.msys2.org/ 下載並安裝 MSYS2
-   - 安裝完成後，開啟 MSYS2 終端
+## 快速開始
 
-2. **安裝必要的套件**
-   ```bash
-   # 更新套件資料庫
-   pacman -Syu
+### 1. 安裝依賴 (MSYS2/MinGW64)
 
-   # 安裝編譯工具和 GTK3
-   pacman -S mingw-w64-x86_64-gcc
-   pacman -S mingw-w64-x86_64-gtk3
-   pacman -S mingw-w64-x86_64-pkg-config
-   pacman -S make
-   ```
+```bash
+# 執行安裝腳本
+./scripts/install_gtk.sh
 
-3. **設置環境變數**
-   - 將 `C:\msys64\mingw64\bin` 添加到系統 PATH 環境變數中
+# 或手動安裝
+pacman -S mingw-w64-x86_64-gtk3 mingw-w64-x86_64-pkg-config mingw-w64-x86_64-gcc
+```
 
-## 編譯和執行
+### 2. 編譯專案
 
-1. **編譯程序**
-   ```bash
-   make
-   ```
+```bash
+# 清理並編譯
+make clean
+make
 
-2. **執行程序**
-   ```bash
-   make run
-   # 或者直接執行
-   ./txt_processor.exe
-   ```
+# 或使用測試腳本
+./scripts/test_compile.sh
+```
 
-3. **清理編譯產物**
-   ```bash
+### 3. 執行程式
+
+```bash
+make run
+# 或直接執行
+./build/txt_processor.exe
+```
+
+### 4. 測試功能
+
+選擇 `test_data/` 資料夾來測試掃描功能。
+
+## 開發指南
+
+### 編譯指令
+
+```bash
+make          # 編譯專案
+make clean    # 清理建置檔案
+make run      # 編譯並執行
+make dev-setup # 設定開發環境
+```
+
+### 模組說明
+
+- **src/main.c**: GTK 界面邏輯和主程式
+- **src/file_processor.c**: 檔案處理核心功能
+- **include/file_processor.h**: 檔案處理模組公開介面
+
+### 最佳實踐
+
+1. 所有 `.c` 檔案放在 `src/` 目錄
+2. 所有 `.h` 檔案放在 `include/` 目錄
+3. 編譯產物自動放在 `build/` 目錄
+4. 測試資料放在 `test_data/` 目錄
+5. 腳本檔案放在 `scripts/` 目錄
    make clean
    ```
 

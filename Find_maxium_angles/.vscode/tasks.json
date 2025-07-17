@@ -1,0 +1,61 @@
+{
+    // VS Code 任務設定檔 - 定義可以執行的自動化任務
+    "version": "2.0.0",
+    "tasks": [
+        {
+            // 任務1: 編譯正式版本 (按 Ctrl+Shift+B 可直接執行)
+            "label": "編譯專案",                    // 任務顯示名稱
+            "type": "shell",                       // 任務類型: shell 表示執行命令列指令
+            "command": "make",                     // 實際執行的指令 (預設編譯正式版)
+            "args": ["release"],                   // 明確指定編譯正式版
+            "group": {
+                "kind": "build",                   // 任務分類: build = 建置任務
+                "isDefault": true                  // 設為預設建置任務 (讓 Ctrl+Shift+B 能直接執行)
+            },
+            "presentation": {
+                "reveal": "always",                // 執行時總是顯示終端機輸出
+                "panel": "shared"                  // 使用共享的終端機面板
+            },
+            "problemMatcher": ["$gcc"]             // 幫助 VS Code 識別 GCC 編譯錯誤並顯示在問題面板
+        },
+        {
+            // 任務2: 編譯除錯版本
+            "label": "編譯除錯版",                  // 任務顯示名稱
+            "type": "shell",                       // 任務類型: shell
+            "command": "make",                     // 執行 make 指令
+            "args": ["debug"],                     // 編譯除錯版本
+            "group": "build",                      // 分類為建置任務
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            // 任務3: 清理編譯產物
+            "label": "清理專案",                    // 任務顯示名稱
+            "type": "shell",                       // 任務類型: shell
+            "command": "make",                     // 執行 make 指令
+            "args": ["clean"],                     // 傳遞 "clean" 參數，相當於執行 "make clean"
+            "group": "build"                       // 分類為建置任務
+        },
+        {
+            // 任務4: 執行正式版程式
+            "label": "執行程式",                    // 任務顯示名稱
+            "type": "shell",                       // 任務類型: shell
+            "command": "make",                     // 執行 make 指令
+            "args": ["run"],                       // 傳遞 "run" 參數，相當於執行 "make run"
+            "group": "test",                       // 分類為測試任務
+            "dependsOn": "編譯專案"                // 執行前先自動執行「編譯專案」任務
+        },
+        {
+            // 任務5: 執行除錯版程式
+            "label": "執行除錯版",                  // 任務顯示名稱
+            "type": "shell",                       // 任務類型: shell
+            "command": "make",                     // 執行 make 指令
+            "args": ["run-debug"],                 // 執行除錯版本
+            "group": "test",                       // 分類為測試任務
+            "dependsOn": "編譯除錯版"              // 執行前先編譯除錯版本
+        }
+    ]
+}
