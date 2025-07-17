@@ -13,10 +13,10 @@ BUILD_DIR = build
 # TARGET 在上面的編譯模式設定中定義
 
 # 源檔案
-SOURCES = $(SRC_DIR)/main.c $(SRC_DIR)/file_processor.c
+SOURCES = $(SRC_DIR)/main.c $(SRC_DIR)/scan.c $(SRC_DIR)/angle_parser.c $(SRC_DIR)/max_finder.c $(SRC_DIR)/callbacks.c $(SRC_DIR)/ui.c
 
 # 物件檔案
-OBJECTS = $(BUILD_DIR)/main.o $(BUILD_DIR)/file_processor.o
+OBJECTS = $(BUILD_DIR)/main.o $(BUILD_DIR)/scan.o $(BUILD_DIR)/angle_parser.o $(BUILD_DIR)/max_finder.o $(BUILD_DIR)/callbacks.o $(BUILD_DIR)/ui.o
 
 # GTK 相關的編譯和連結標誌
 # 使用 pkg-config 來取得 GTK3 的編譯參數
@@ -54,8 +54,12 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # 明確定義依賴關係
-$(BUILD_DIR)/main.o: $(SRC_DIR)/main.c $(INCLUDE_DIR)/file_processor.h
-$(BUILD_DIR)/file_processor.o: $(SRC_DIR)/file_processor.c $(INCLUDE_DIR)/file_processor.h
+$(BUILD_DIR)/main.o: $(SRC_DIR)/main.c $(INCLUDE_DIR)/ui.h $(INCLUDE_DIR)/callbacks.h
+$(BUILD_DIR)/scan.o: $(SRC_DIR)/scan.c $(INCLUDE_DIR)/scan.h
+$(BUILD_DIR)/angle_parser.o: $(SRC_DIR)/angle_parser.c $(INCLUDE_DIR)/angle_parser.h $(INCLUDE_DIR)/scan.h
+$(BUILD_DIR)/max_finder.o: $(SRC_DIR)/max_finder.c $(INCLUDE_DIR)/max_finder.h
+$(BUILD_DIR)/callbacks.o: $(SRC_DIR)/callbacks.c $(INCLUDE_DIR)/callbacks.h $(INCLUDE_DIR)/scan.h $(INCLUDE_DIR)/angle_parser.h $(INCLUDE_DIR)/max_finder.h
+$(BUILD_DIR)/ui.o: $(SRC_DIR)/ui.c $(INCLUDE_DIR)/ui.h $(INCLUDE_DIR)/callbacks.h
 
 # 清理編譯產物
 clean:
