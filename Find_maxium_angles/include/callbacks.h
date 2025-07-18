@@ -2,6 +2,7 @@
 #define CALLBACKS_H
 
 #include <gtk/gtk.h>
+#include "angle_parser.h" // 為了 AngleAnalysisResult
 
 // 應用狀態結構
 typedef struct {
@@ -19,6 +20,16 @@ typedef struct {
     gboolean cancel_requested;  // 取消請求標記
     GMutex cancel_mutex;        // 保護取消標記的互斥鎖
 } AppState;
+
+// 異步處理資料結構
+typedef struct {
+    AppState *app_state;
+    char *folder_path;
+    char *output_file;
+    AngleAnalysisResult result;
+    int max_search_success;
+    char *max_result_file_path;
+} AsyncProcessData;
 
 /**
  * 選擇資料夾的回調函數

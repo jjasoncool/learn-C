@@ -14,16 +14,6 @@ typedef struct {
     gchar *text;
 } ProgressUpdateData;
 
-// 異步處理資料結構
-typedef struct {
-    AppState *app_state;
-    char *folder_path;
-    char *output_file;
-    AngleAnalysisResult result;
-    int max_search_success;
-    char *max_result_file_path;
-} AsyncProcessData;
-
 // 靜態函數聲明
 static gboolean update_progress_ui(gpointer data);
 static void progress_callback(int current, int total, const char *filename, void *user_data);

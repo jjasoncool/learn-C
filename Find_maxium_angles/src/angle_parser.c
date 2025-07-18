@@ -8,6 +8,7 @@
 #include "scan.h"
 #include "safe_getline.h"
 #include "max_finder.h"
+#include "callbacks.h" // 為了存取 AppState 和 is_cancel_requested
 
 // 全局 mutex 保護 hash table 操作
 static GMutex angle_parser_mutex;
@@ -165,11 +166,13 @@ static void update_angle_range(GHashTable *ranges_table, const AngleData *data) 
 }
 
 // 解析單個 TXT 檔案中的角度資料
-AngleAnalysisResult parse_angle_file(const char *file_path) {
+AngleAnalysisResult parse_angle_file(const char *file_path, void *user_data) {
     AngleAnalysisResult result = init_angle_analysis_result();
     FILE *file = NULL;
     char *line = NULL;
     GHashTable *ranges_table = NULL;
+    AsyncProcessData *async_data = (AsyncProcessData *)user_data;
+    AppState *state = async_data ? async_data->app_state : NULL;
 
     if (!file_path) {
         result.error = g_strdup("檔案路徑為空");
@@ -194,6 +197,16 @@ AngleAnalysisResult parse_angle_file(const char *file_path) {
     int line_number = 0;
     while ((line = safe_getline(file)) != NULL) {
         line_number++;
+
+        // 每 1000 行檢查一次取消請求
+        if (state && line_number % 1000 == 0) {
+            if (is_cancel_requested(state)) {
+                result.error = g_strdup("操作已取消");
+                free(line);
+                line = NULL;
+                goto cleanup;
+            }
+        }
 
         AngleData data;
         if (parse_angle_line(line, &data)) {
@@ -245,8 +258,8 @@ cleanup:
 }
 
 // 處理資料夾中的所有 TXT 檔案並分析角度
-AngleAnalysisResult process_angle_files(const char *folder_path, const char *output_file) {
-    return process_angle_files_with_progress(folder_path, output_file, NULL, NULL);
+AngleAnalysisResult process_angle_files(const char *folder_path, const char *output_file, void *user_data) {
+    return process_angle_files_with_progress(folder_path, output_file, NULL, user_data);
 }
 
 // 處理資料夾中的所有 TXT 檔案並分析角度（帶進度回調）
@@ -291,7 +304,16 @@ AngleAnalysisResult process_angle_files_with_progress(const char *folder_path,
 
     // 處理每個檔案，直接寫入分析結果
     int processed_files = 0;
+    AsyncProcessData *async_data = (AsyncProcessData *)user_data;
+    AppState *state = async_data ? async_data->app_state : NULL;
+
     for (int i = 0; i < scan_result.count; i++) {
+        // 在處理每個檔案前檢查取消請求
+        if (state && is_cancel_requested(state)) {
+            final_result.error = g_strdup("操作已取消");
+            goto cleanup;
+        }
+
         const char *filename = scan_result.files[i].name;
 
         // 跳過結果檔案
@@ -310,7 +332,7 @@ AngleAnalysisResult process_angle_files_with_progress(const char *folder_path,
             continue;
         }
 
-        AngleAnalysisResult file_result = parse_angle_file(file_path);
+        AngleAnalysisResult file_result = parse_angle_file(file_path, user_data);
 
         if (file_result.success && file_result.count > 0) {
             // 直接分析這個檔案的最大角度差值並寫入

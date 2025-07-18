@@ -1,167 +1,114 @@
-# TXT 檔案處理工具
+# 最大角度差分析工具
 
-一個使用 C 語言和 GTK3 開發的圖形化 TXT 檔案掃描工具。
+一個使用 C 語言和 GTK3 開發的圖形化工具，用於分析特定格式的 TXT 檔案，並找出指定剖面 (Profile) 內的最大角度差。
+
+## 功能特色
+
+- 🖥️ **現代化圖形界面**: 使用 GTK3 建構，提供友善的使用者體驗。
+- 📂 **資料夾批次處理**: 遞歸掃描指定資料夾中的所有 TXT 檔案。
+- ⚡ **非同步處理**: 將耗時的分析工作放在背景執行緒中，避免 UI 凍結。
+- 📊 **即時進度反饋**: 提供進度條、狀態文字，並可隨時取消處理。
+- 🧩 **模組化程式設計**: 將 UI、事件處理、檔案掃描、資料解析和結果計算等功能清晰分離。
+- 🛡️ **完善的錯誤處理**: 對檔案讀取、記憶體分配等潛在問題進行了處理。
+- 📝 **詳細結果輸出**:
+    - `angle_analysis_result.txt`: 記錄每個檔案中具有最大角度差的剖面及其詳細資訊。
+    - `max_angle_result.txt`: 記錄所有檔案中的全域最大角度差及其來源檔案和剖面。
 
 ## 專案結構
 
 ```
 Find_maxium_angles/
 ├── src/                    # 原始碼檔案
-│   ├── main.c             # 主程式 (GTK 界面)
-│   └── file_processor.c   # 檔案處理模組實作
-├── include/               # 標頭檔
-│   └── file_processor.h   # 檔案處理模組介面
-├── build/                 # 編譯產物 (自動產生)
-│   ├── main.o            # 主程式物件檔
-│   ├── file_processor.o  # 檔案處理模組物件檔
-│   └── txt_processor.exe # 最終執行檔
-├── test_data/            # 測試資料
-│   ├── sample1.txt       # 中文測試檔案
-│   ├── english_sample.txt # 英文測試檔案
-│   ├── empty_test.txt    # 小檔案測試
-│   ├── large_file.txt    # 大檔案測試
-│   └── README.md         # 測試資料說明
-├── scripts/              # 腳本檔案
-│   ├── install_gtk.sh    # GTK 環境安裝腳本
-│   └── test_compile.sh   # 編譯測試腳本
-├── docs/                 # 文件 (將來使用)
-├── Makefile              # 建置設定
-├── README.md             # 專案說明 (本檔案)
-└── .gitignore           # Git 忽略清單
+│   ├── main.c             # 應用程式主進入點
+│   ├── ui.c               # GTK 介面佈局與建立
+│   ├── callbacks.c        # GTK 事件回呼與主邏輯協調
+│   ├── scan.c             # 檔案與目錄掃描模組
+│   ├── angle_parser.c     # 核心分析邏輯：解析檔案並計算角度差
+│   ├── max_finder.c       # 從分析結果中尋找全域最大值
+│   └── safe_getline.c     # 安全讀取檔案行的輔助函式
+├── include/                # 標頭檔
+│   ├── ui.h
+│   ├── callbacks.h
+│   ├── scan.h
+│   ├── angle_parser.h
+│   ├── max_finder.h
+│   └── safe_getline.h
+├── build/                  # 編譯產物 (自動產生)
+├── test_data/              # 測試資料
+├── scripts/                # 輔助腳本
+│   ├── install_gtk.sh     # GTK 環境安裝腳本
+│   └── test_compile.sh    # 編譯測試腳本
+├── Makefile                # 建置設定
+├── README.md               # 專案說明 (本檔案)
+└── .gitignore              # Git 忽略清單
 ```
-
-## 功能特色
-
-- 🔍 掃描指定資料夾中的所有 TXT 檔案
-- 📊 顯示檔案名稱和大小統計
-- 🖥️ 現代化 GTK3 圖形界面
-- 🧩 模組化程式設計
-- 🛡️ 完善的錯誤處理
 
 ## 快速開始
 
 ### 1. 安裝依賴 (MSYS2/MinGW64)
 
 ```bash
-# 執行安裝腳本
+# 建議執行安裝腳本
 ./scripts/install_gtk.sh
 
 # 或手動安裝
-pacman -S mingw-w64-x86_64-gtk3 mingw-w64-x86_64-pkg-config mingw-w64-x86_64-gcc
+pacman -S mingw-w64-x86_64-gtk3 mingw-w64-x86_64-pkg-config mingw-w64-x86_64-gcc make
 ```
 
 ### 2. 編譯專案
 
 ```bash
-# 清理並編譯
+# 清理並編譯 (產生 release 版本的 ./build/txt_processor.exe)
 make clean
 make
 
-# 或使用測試腳本
-./scripts/test_compile.sh
+# 編譯 debug 版本 (產生 ./build/txt_processor_debug.exe)
+make debug
 ```
 
 ### 3. 執行程式
 
 ```bash
+# 編譯並執行 release 版本
 make run
+
 # 或直接執行
 ./build/txt_processor.exe
 ```
 
-### 4. 測試功能
+### 4. 使用說明
 
-選擇 `test_data/` 資料夾來測試掃描功能。
+1.  啟動程式後，點擊「選擇資料夾」按鈕，選擇包含 `.txt` 資料檔案的資料夾。
+2.  點擊「掃描檔案」按鈕 (可選)，程式會列出在該資料夾中找到的所有 `.txt` 檔案。
+3.  點擊「分析角度」按鈕，程式會開始在背景進行分析。
+4.  進度條會顯示目前的處理進度，此時可點擊「取消」來終止分析。
+5.  分析完成後，結果會顯示在下方的文字區域中，同時會在您選擇的資料夾中產生 `angle_analysis_result.txt` 和 `max_angle_result.txt` 兩個報告檔案。
 
-## 開發指南
+## 模組說明
 
-### 編譯指令
-
-```bash
-make          # 編譯專案
-make clean    # 清理建置檔案
-make run      # 編譯並執行
-make dev-setup # 設定開發環境
-```
-
-### 模組說明
-
-- **src/main.c**: GTK 界面邏輯和主程式
-- **src/file_processor.c**: 檔案處理核心功能
-- **include/file_processor.h**: 檔案處理模組公開介面
-
-### 最佳實踐
-
-1. 所有 `.c` 檔案放在 `src/` 目錄
-2. 所有 `.h` 檔案放在 `include/` 目錄
-3. 編譯產物自動放在 `build/` 目錄
-4. 測試資料放在 `test_data/` 目錄
-5. 腳本檔案放在 `scripts/` 目錄
-   make clean
-   ```
-
-## 使用說明
-
-1. 啟動程序後，會看到一個圖形化界面
-2. 點擊「選擇資料夾」按鈕來選擇包含 TXT 檔案的資料夾
-3. 點擊「處理檔案」按鈕來處理選中資料夾中的檔案
-4. 結果會顯示在下方的文字區域中
-
-## 當前狀態
-
-- ✅ 基本 GTK 界面
-- ✅ 資料夾選擇功能
-- ⏳ TXT 檔案讀取功能（開發中）
-- ⏳ 檔案處理邏輯（開發中）
-- ⏳ 結果輸出功能（開發中）
-
-## 程序結構
-
-```
-Find_maxium_angles/
-├── main.c          # 主程序檔案
-├── Makefile        # 編譯配置檔案
-└── README.md       # 說明文件
-```
-
-## 後續開發計劃
-
-1. 實現 TXT 檔案掃描功能
-2. 添加檔案內容讀取功能
-3. 實現特定的檔案處理邏輯
-4. 改善界面和用戶體驗
-5. 添加錯誤處理和狀態回饋
-
-## 快速開始
-
-1. **檢查環境**: 執行 `check_environment.bat` 檢查開發環境
-2. **自動安裝**: 在 MSYS2 MinGW64 終端中執行 `./install_gtk.sh`
-3. **測試編譯**: 執行 `./test_compile.sh` 測試編譯
+-   **`main.c`**: 程式的進入點，負責初始化 GTK 應用程式和 `AppState` 狀態結構。
+-   **`ui.c` / `ui.h`**: 負責建立所有 GTK 圖形介面元件 (視窗、按鈕、文字視圖等)，並將它們組織在主視窗中。
+-   **`callbacks.c` / `callbacks.h`**: 應用程式的核心控制器。負責處理所有 UI 事件 (如按鈕點擊)，協調其他模組完成工作，並管理非同步處理的執行緒。
+-   **`scan.c` / `scan.h`**: 提供掃描指定目錄下所有 `.txt` 檔案的功能。
+-   **`angle_parser.c` / `angle_parser.h`**: 專案的核心業務邏輯。它負責解析單一 `.txt` 檔案，按 "Profile ID" 分組，並計算每個 Profile 內最大和最小 "Bin" 之間的角度差。
+-   **`max_finder.c` / `max_finder.h`**: 負責讀取 `angle_parser.c` 產生的中間結果檔案，並從中找出全域最大角度差。
+-   **`safe_getline.c` / `safe_getline.h`**: 一個健壯的輔助函式，用於安全地從檔案中讀取任意長度的行，避免緩衝區溢位。
 
 ## 故障排除
 
-### 找不到 gtk/gtk.h 錯誤
+如果遇到 `gtk/gtk.h` 找不到或缺少 DLL 的問題，請參考以下步驟。
 
-如果出現 `#include <gtk/gtk.h>` 找不到套件的錯誤，請按照以下步驟操作：
-
-#### 步驟 1: 安裝 MSYS2
-1. 下載並安裝 MSYS2: https://www.msys2.org/
-2. 使用默認安裝路徑: `C:\msys64\`
+#### 步驟 1: 安裝與設定 MSYS2
+1.  下載並安裝 MSYS2: https://www.msys2.org/
+2.  開啟 **MSYS2 MinGW 64-bit** 終端 (重要提示：不是 MSYS2 MSYS 或其他終端)。
 
 #### 步驟 2: 安裝開發套件
-開啟 **MSYS2 MinGW 64-bit** 終端（重要：不是普通的 MSYS2 終端），執行：
-
+在 MSYS2 MinGW 64-bit 終端中執行：
 ```bash
 # 更新套件資料庫
 pacman -Syu
 
-# 安裝必要套件
-pacman -S mingw-w64-x86_64-gcc
-pacman -S mingw-w64-x86_64-gtk3
-pacman -S mingw-w64-x86_64-pkg-config
-pacman -S make
-
-# 或者一次安裝所有套件
+# 一次安裝所有必要套件
 pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-gtk3 mingw-w64-x86_64-pkg-config make
 ```
 
@@ -172,43 +119,7 @@ gcc --version
 pkg-config --version
 pkg-config --exists gtk+-3.0 && echo "GTK3 OK" || echo "GTK3 NOT FOUND"
 ```
+如果 GTK3 顯示 "OK"，表示您的環境已準備就緒。
 
-#### 步驟 4: 編譯方式選擇
-
-**方法 1: 在 MSYS2 終端中編譯（推薦）**
-```bash
-./test_compile.sh
-```
-
-**方法 2: 在 Windows 命令提示字元中編譯**
-1. 將 `C:\msys64\mingw64\bin` 添加到系統 PATH 環境變數
-2. 重啟命令提示字元
-3. 執行 `build.bat`
-
-### 常見錯誤解決方案
-
-#### 錯誤: "gtk+-3.0 not found"
-```bash
-# 重新安裝 GTK3
-pacman -S mingw-w64-x86_64-gtk3
-```
-
-#### 錯誤: "pkg-config command not found"
-```bash
-# 安裝 pkg-config
-pacman -S mingw-w64-x86_64-pkg-config
-```
-
-#### 錯誤: "gcc command not found"
-```bash
-# 安裝 GCC 編譯器
-pacman -S mingw-w64-x86_64-gcc
-```
-
-#### 編譯成功但執行時缺少 DLL
-- 確保在 MSYS2 MinGW64 環境中執行程序
-- 或者將 `C:\msys64\mingw64\bin` 添加到 PATH
-
-### 執行錯誤
-- 確保所有 GTK3 相關的 DLL 檔案可以被找到
-- 檢查是否在正確的環境中執行程序
+#### 步驟 4: 編譯
+在專案根目錄下，於 MSYS2 MinGW64 終端中執行 `make`。

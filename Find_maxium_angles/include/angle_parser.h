@@ -35,17 +35,19 @@ typedef struct {
 /**
  * 解析單個 TXT 檔案中的角度資料
  * @param file_path 檔案路徑
+ * @param user_data 用於傳遞取消狀態等資訊的用戶資料
  * @return AngleAnalysisResult 分析結果
  */
-AngleAnalysisResult parse_angle_file(const char *file_path);
+AngleAnalysisResult parse_angle_file(const char *file_path, void *user_data);
 
 /**
  * 處理資料夾中的所有 TXT 檔案並分析角度
  * @param folder_path 資料夾路徑
  * @param output_file 輸出結果檔案名稱
+ * @param user_data 用於傳遞取消狀態等資訊的用戶資料
  * @return AngleAnalysisResult 整體分析結果
  */
-AngleAnalysisResult process_angle_files(const char *folder_path, const char *output_file);
+AngleAnalysisResult process_angle_files(const char *folder_path, const char *output_file, void *user_data);
 
 /**
  * 處理資料夾中的所有 TXT 檔案並分析角度（帶進度回調）
