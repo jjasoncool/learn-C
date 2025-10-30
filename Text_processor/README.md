@@ -17,7 +17,7 @@
 ## 專案結構
 
 ```
-Find_maxium_angles/
+Text_processor/
 ├── src/                    # 原始碼檔案
 │   ├── main.c             # 應用程式主進入點
 │   ├── ui.c               # GTK 介面佈局與建立

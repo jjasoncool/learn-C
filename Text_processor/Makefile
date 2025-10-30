@@ -13,10 +13,10 @@ BUILD_DIR = build
 # TARGET 在上面的編譯模式設定中定義
 
 # 源檔案
-SOURCES = $(SRC_DIR)/main.c $(SRC_DIR)/scan.c $(SRC_DIR)/angle_parser.c $(SRC_DIR)/max_finder.c $(SRC_DIR)/callbacks.c $(SRC_DIR)/ui.c $(SRC_DIR)/safe_getline.c
+SOURCES = $(SRC_DIR)/main.c $(SRC_DIR)/scan.c $(SRC_DIR)/angle_parser.c $(SRC_DIR)/max_finder.c $(SRC_DIR)/callbacks.c $(SRC_DIR)/features/angle_processing.c $(SRC_DIR)/features/file_processing.c $(SRC_DIR)/features/elevation_processing.c $(SRC_DIR)/ui/ui_main.c $(SRC_DIR)/ui/tabs/angle_analysis_tab.c $(SRC_DIR)/ui/tabs/elevation_conversion_tab.c $(SRC_DIR)/ui/tabs/data_conversion_tab.c $(SRC_DIR)/safe_getline.c
 
 # 物件檔案
-OBJECTS = $(BUILD_DIR)/main.o $(BUILD_DIR)/scan.o $(BUILD_DIR)/angle_parser.o $(BUILD_DIR)/max_finder.o $(BUILD_DIR)/callbacks.o $(BUILD_DIR)/ui.o $(BUILD_DIR)/safe_getline.o
+OBJECTS = $(BUILD_DIR)/main.o $(BUILD_DIR)/scan.o $(BUILD_DIR)/angle_parser.o $(BUILD_DIR)/max_finder.o $(BUILD_DIR)/callbacks.o $(BUILD_DIR)/angle_processing.o $(BUILD_DIR)/file_processing.o $(BUILD_DIR)/elevation_processing.o $(BUILD_DIR)/ui_main.o $(BUILD_DIR)/angle_analysis_tab.o $(BUILD_DIR)/elevation_conversion_tab.o $(BUILD_DIR)/data_conversion_tab.o $(BUILD_DIR)/safe_getline.o
 
 # GTK 相關的編譯和連結標誌
 # 使用 pkg-config 來取得 GTK3 的編譯參數
@@ -49,8 +49,15 @@ $(BUILD_DIR):
 $(TARGET): $(OBJECTS)
 	$(CC) $(CFLAGS) -o $(TARGET) $(OBJECTS) $(LDFLAGS)
 
-# 編譯物件檔案
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+# 定義源文件搜索路徑
+vpath %.c $(SRC_DIR) $(SRC_DIR)/ui $(SRC_DIR)/ui/tabs $(SRC_DIR)/features
+
+# 編譯物件檔案 (通用規則，支援子目錄)
+$(BUILD_DIR)/%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/angle_processing.o: $(SRC_DIR)/features/angle_processing.c
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/file_processing.o: $(SRC_DIR)/features/file_processing.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # 明確定義依賴關係
@@ -59,7 +66,10 @@ $(BUILD_DIR)/scan.o: $(SRC_DIR)/scan.c $(INCLUDE_DIR)/scan.h
 $(BUILD_DIR)/angle_parser.o: $(SRC_DIR)/angle_parser.c $(INCLUDE_DIR)/angle_parser.h $(INCLUDE_DIR)/scan.h $(INCLUDE_DIR)/safe_getline.h
 $(BUILD_DIR)/max_finder.o: $(SRC_DIR)/max_finder.c $(INCLUDE_DIR)/max_finder.h $(INCLUDE_DIR)/safe_getline.h
 $(BUILD_DIR)/callbacks.o: $(SRC_DIR)/callbacks.c $(INCLUDE_DIR)/callbacks.h $(INCLUDE_DIR)/scan.h $(INCLUDE_DIR)/angle_parser.h $(INCLUDE_DIR)/max_finder.h
-$(BUILD_DIR)/ui.o: $(SRC_DIR)/ui.c $(INCLUDE_DIR)/ui.h $(INCLUDE_DIR)/callbacks.h
+$(BUILD_DIR)/ui_main.o: $(SRC_DIR)/ui/ui_main.c $(SRC_DIR)/ui/ui.h $(INCLUDE_DIR)/callbacks.h
+$(BUILD_DIR)/angle_analysis_tab.o: $(SRC_DIR)/ui/tabs/angle_analysis_tab.c $(SRC_DIR)/ui/ui.h $(INCLUDE_DIR)/callbacks.h
+$(BUILD_DIR)/elevation_conversion_tab.o: $(SRC_DIR)/ui/tabs/elevation_conversion_tab.c $(SRC_DIR)/ui/ui.h $(INCLUDE_DIR)/callbacks.h
+$(BUILD_DIR)/data_conversion_tab.o: $(SRC_DIR)/ui/tabs/data_conversion_tab.c $(SRC_DIR)/ui/ui.h
 $(BUILD_DIR)/safe_getline.o: $(SRC_DIR)/safe_getline.c $(INCLUDE_DIR)/safe_getline.h
 
 # 清理編譯產物

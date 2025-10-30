@@ -80,4 +80,4 @@ $RECYCLE.BIN/
 *.rar
 *.7z
 
-test_data/*angle*.txt
+test_data/**/*.txt

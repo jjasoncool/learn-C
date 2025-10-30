@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "ui.h"
+#include "ui/ui.h"
 #include "callbacks.h"
 
 int main(int argc, char **argv) {
