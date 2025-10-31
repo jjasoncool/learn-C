@@ -534,8 +534,8 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
 
     // 5. 逐行處理 - 通過進度回調支持多線程UI更新
     int current_line = 0;
-    // 根據總行數動態調整進度更新間隔 - 支援8億行巨型檔案，避免頻繁更新浪費效能
-    int progress_update_interval = MAX(10, MIN(10000, total_lines / 500)); // 每處理總行數的0.2%更新一次，最少10行，最大10,000行
+    // 根據總行數動態調整進度更新間隔 - 支援超快速取消，每10行檢查一次狀態
+    int progress_update_interval = MAX(1, MIN(10, total_lines / 10000)); // 每處理總行數的0.01%更新一次，支持超快速取消，最小頻率1行檢查一次
     int lines_since_last_update = 0;
 
     while (fgets(temp_line, sizeof(temp_line), input_file)) {
@@ -558,11 +558,11 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
                 double progress = (double)current_line / total_lines;
                 progress_callback(progress * 100.0, cancel_check_message); // 傳遞真實進度百分比
 
-                // 取消功能暂时停用：永遠不檢查取消，專注修好進度條顯示
-                // if (error && *error && g_error_matches(*error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
-                //     g_print("[CANCEL] 檢測到取消請求，正在終止處理循環\n");
-                //     break; // 立即跳出處理循環
-                // }
+                // 檢查取消請求
+                if (error && *error && g_error_matches(*error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+                    g_print("[CANCEL] 檢測到取消請求，正在終止處理循環\n");
+                    break; // 立即跳出處理循環
+                }
             }
 
             lines_since_last_update = 0;

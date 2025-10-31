@@ -258,17 +258,3 @@ void on_analyze_angles(GtkWidget *widget, gpointer data) {
     }
     g_thread_unref(thread); // 讓執行緒自動清理
 }
-
-// 取消處理的回調函數
-void on_cancel_processing(GtkWidget *widget, gpointer data) {
-    (void)widget;  // 壓制警告
-    AppState *state = (AppState *)data;
-
-    if (!state->is_processing) {
-        return; // 沒有正在進行的處理
-    }
-
-    // 設定取消請求
-    set_cancel_requested(state, TRUE);
-    gtk_label_set_text(GTK_LABEL(state->status_label), "正在取消處理...");
-}

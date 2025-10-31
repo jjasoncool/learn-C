@@ -630,13 +630,29 @@ static gboolean update_result_callback(gpointer user_data) {
         gtk_label_set_text(GTK_LABEL(state->status_label), error_message);
 
         if (state->altitude_text_buffer) {
-            gtk_text_buffer_set_text(state->altitude_text_buffer, error_message, -1);
+            // 追加錯誤訊息，而不是清除內容
+            GtkTextIter end_iter;
+            gtk_text_buffer_get_end_iter(state->altitude_text_buffer, &end_iter);
+            if (g_strcmp0(error_message, "操作已取消") == 0) {
+                // 取消訊息用不同格式
+                gtk_text_buffer_insert(state->altitude_text_buffer, &end_iter,
+                                      "\n\n處理已取消！", -1);
+            } else {
+                gtk_text_buffer_insert(state->altitude_text_buffer, &end_iter,
+                                      g_strdup_printf("\n\n錯誤：%s", error_message), -1);
+            }
         }
     } else {
         gtk_label_set_text(GTK_LABEL(state->status_label), "高程轉換完成");
 
         if (state->altitude_text_buffer) {
             gtk_text_buffer_set_text(state->altitude_text_buffer, data->result_text->str, -1);
+        }
+
+        // 處理完成時維持進度條在100%
+        if (state->elevation_progress_bar) {
+            gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(state->elevation_progress_bar), 1.0);
+            gtk_progress_bar_set_text(GTK_PROGRESS_BAR(state->elevation_progress_bar), "處理完成");
         }
     }
 
@@ -784,6 +800,9 @@ void on_perform_conversion(GtkWidget *widget, gpointer data) {
     process_data->current_progress = 0.0;
     strcpy(process_data->progress_text, "準備處理...");
 
+    // 設定處理中狀態
+    state->is_processing = TRUE;
+
     // 更新按鈕狀態（禁用處理按鈕，啟用停止按鈕）
     gtk_widget_set_sensitive(GTK_WIDGET(g_object_get_data(G_OBJECT(state->window), "convert_button")), FALSE);
     gtk_widget_set_sensitive(GTK_WIDGET(g_object_get_data(G_OBJECT(state->window), "elevation_stop_button")), TRUE);
@@ -807,4 +826,26 @@ void on_perform_conversion(GtkWidget *widget, gpointer data) {
 
     // 儲存線程參考以便強力取消
     g_object_set_data(G_OBJECT(state->window), "elevation_worker_thread", worker_thread);
+}
+
+// 取消處理的回調函數 (為高程轉換專用)
+void on_cancel_processing(GtkWidget *widget, gpointer data) {
+    (void)widget;  // 壓制警告
+    AppState *state = (AppState *)data;
+
+    g_print("[DEBUG] on_cancel_processing called, is_processing=%d\n", state->is_processing);
+
+    if (!state->is_processing) {
+        g_print("[DEBUG] on_cancel_processing: not processing, return\n");
+        return; // 沒有正在進行的處理
+    }
+
+    // 設定取消請求 (讓背景線程檢測到並自動終止)
+    set_cancel_requested(state, TRUE);
+    gtk_label_set_text(GTK_LABEL(state->status_label), "正在取消處理...");
+    g_print("[DEBUG] on_cancel_processing: cancel requested set to TRUE\n");
+
+    // 基本實現：只設定取消信號，讓背景線程自動檢查
+    // 不使用 g_thread_join 避免阻塞UI線程
+    // 線程會在下次檢查取消請求時自動終止並清理資源
 }
