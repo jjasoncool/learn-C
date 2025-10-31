@@ -39,6 +39,19 @@ void build_elevation_conversion_tab(AppState *state, GtkNotebook *notebook) {
     g_signal_connect(convert_button, "clicked", G_CALLBACK(on_perform_conversion), state);
     gtk_box_pack_start(GTK_BOX(button_hbox), convert_button, FALSE, FALSE, 10);  // 多一些間距
 
+    // 創建停止按鈕
+    GtkWidget *stop_button = gtk_button_new_with_label("停止轉換");
+    gtk_widget_set_size_request(stop_button, 100, 40);
+    g_signal_connect(stop_button, "clicked", G_CALLBACK(on_cancel_processing), state);
+    gtk_box_pack_start(GTK_BOX(button_hbox), stop_button, FALSE, FALSE, 0);
+
+    // 預設停止按鈕為不可用
+    gtk_widget_set_sensitive(stop_button, FALSE);
+
+    // 將停止按鈕和執行按鈕儲存到window中以便後續控制
+    g_object_set_data(G_OBJECT(state->window), "elevation_stop_button", stop_button);
+    g_object_set_data(G_OBJECT(state->window), "convert_button", convert_button);
+
     // 創建狀態標籤
     GtkWidget *status_label = gtk_label_new("請選擇要轉換的檔案和 SEP 檔案");
     gtk_label_set_xalign(GTK_LABEL(status_label), 0.0);

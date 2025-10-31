@@ -2,11 +2,36 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <glib.h>
 #include "callbacks.h"
 #include "scan.h"
 #include "angle_parser.h"
 #include "max_finder.h"
 #include "elevation_processing.h"
+
+// 延遲捲動用的數據結構
+typedef struct {
+    GtkTextView *text_view;
+    GtkTextBuffer *buffer;
+} ScrollData;
+
+// 延遲捲動的回調函數
+static gboolean delayed_scroll_to_end(gpointer user_data) {
+    ScrollData *ctx = (ScrollData *)user_data;
+
+    if (ctx->text_view && GTK_IS_TEXT_VIEW(ctx->text_view)) {
+        // 確保視圖未被銷毀
+        GtkTextIter scroll_iter;
+        gtk_text_buffer_get_end_iter(ctx->buffer, &scroll_iter);
+        gtk_text_view_scroll_to_iter(ctx->text_view, &scroll_iter, 0.0, TRUE, 0.0, 1.0);
+
+        // 確保變化生效
+        gtk_widget_queue_draw(GTK_WIDGET(ctx->text_view));
+    }
+
+    g_free(ctx);
+    return FALSE; // 只執行一次
+}
 
 // 初始化應用狀態
 void init_app_state(AppState *state) {
@@ -67,11 +92,37 @@ void set_processing_state(AppState *state, gboolean processing) {
         gtk_widget_show(state->cancel_button);
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(state->progress_bar), 0.0);
         gtk_label_set_text(GTK_LABEL(state->progress_label), "準備開始處理...");
+
+        // 同時控制高程轉換的停止按鈕
+        GtkWidget *stop_button = GTK_WIDGET(g_object_get_data(G_OBJECT(state->window), "elevation_stop_button"));
+        if (stop_button) {
+            gtk_widget_set_sensitive(stop_button, TRUE);
+        } else {
+            // 如果找不到全域存儲的按鈕，嘗試從當前的notebook頁籤中找到
+            if (state->notebook) {
+                GtkWidget *current_page = gtk_notebook_get_nth_page(GTK_NOTEBOOK(state->notebook),
+                                                                   gtk_notebook_get_current_page(GTK_NOTEBOOK(state->notebook)));
+                if (current_page) {
+                    stop_button = GTK_WIDGET(g_object_get_data(G_OBJECT(current_page), "stop_button"));
+                    if (stop_button) {
+                        gtk_widget_set_sensitive(stop_button, TRUE);
+                        // 同時將其儲存到window級別供下次使用
+                        g_object_set_data(G_OBJECT(state->window), "elevation_stop_button", stop_button);
+                    }
+                }
+            }
+        }
     } else {
         gtk_widget_hide(state->progress_container);
         gtk_widget_hide(state->cancel_button);
         // 重置取消標記
         set_cancel_requested(state, FALSE);
+
+        // 同時控制高程轉換的停止按鈕
+        GtkWidget *stop_button = GTK_WIDGET(g_object_get_data(G_OBJECT(state->window), "elevation_stop_button"));
+        if (stop_button) {
+            gtk_widget_set_sensitive(stop_button, FALSE);
+        }
     }
 }
 
@@ -259,70 +310,126 @@ void on_select_file(GtkWidget *widget, gpointer data) {
                                          strstr(filename, "LAT-EL");
 
             if (is_elevation_format) {
-                // 高程數據格式分析
+                // 高程數據格式分析 - 簡化驗證結果顯示
                 g_string_append_printf(display_text, "檔案格式: 高程數據 (7欄)\n");
                 g_string_append_printf(display_text, "期望格式: datetime/tide/經度/緯度/ProcessedDepth/col6/col7\n\n");
-            } else {
-                // 角度數據格式分析
-                g_string_append_printf(display_text, "檔案格式: 角度數據 (變動欄位)\n\n");
-            }
 
-            g_string_append_printf(display_text, "前 %d 行內容 (含字段檢查):\n", analysis_result->line_count);
-            g_string_append_printf(display_text, "==================================================\n");
+                // 簡化格式驗證邏輯
+                int valid_lines = 0;
+                int total_data_lines = 0;
+                int filtered_lines = 0;
 
-            // 分析每一行並檢查字段解析
-            for (int i = 0; i < analysis_result->line_count; i++) {
-                g_string_append_printf(display_text, "第 %d 行: %s\n", i + 1, analysis_result->lines[i]);
+                g_string_append_printf(display_text, "格式驗證結果:\n");
+                g_string_append_printf(display_text, "================\n");
 
-                if (is_elevation_format) {
+                // 分析每一行並統計格式驗證結果
+                for (int i = 0; i < analysis_result->line_count; i++) {
+                    if (g_strstrip(g_strdup(analysis_result->lines[i]))[0] == '\0') {
+                        continue; // 跳過空行
+                    }
+
+                    total_data_lines++;
+
                     // 試著解析7欄數據
                     TideDataRow test_row;
                     if (parse_tide_data_row(analysis_result->lines[i], &test_row)) {
-                        g_string_append_printf(display_text,
-                            "       ├──解析成功: DT=%s, Tide=%.3f, Lon=%.7f, Lat=%.7f, Depth=%.3f, C6=%.3f, C7=%.3f\n",
-                            test_row.datetime, test_row.tide, test_row.longitude,
-                            test_row.latitude, test_row.processed_depth, test_row.col6, test_row.col7);
+                        valid_lines++;
 
                         // 檢查過濾條件
                         if (test_row.col6 == 0.0 || test_row.col7 == 0.0) {
-                            g_string_append_printf(display_text, "       ├──過濾條件: ❌ 會被過濾 (col6或col7為0)\n");
-                        } else {
-                            g_string_append_printf(display_text, "       ├──過濾條件: ✅ 會被處理\n");
+                            filtered_lines++;
                         }
-                    } else {
-                        g_string_append_printf(display_text, "       ├──解析失敗: 格式不正確\n");
                     }
                 }
-                g_string_append_printf(display_text, "\n");
-            }
 
-            if (analysis_result->line_count == 0) {
-                g_string_append(display_text, "(檔案是空的)\n");
-            }
+                // 顯示簡化的驗證結果
+                if (total_data_lines == 0) {
+                    g_string_append_printf(display_text, "❌ 無有效數據行\n");
+                } else {
+                    double valid_percentage = (double)valid_lines / total_data_lines * 100.0;
+                    g_string_append_printf(display_text, "✅ 格式相符: %d/%d 行 (%.1f%%)\n",
+                                         valid_lines, total_data_lines, valid_percentage);
 
-            g_string_append_printf(display_text, "==================================================\n");
-            g_string_append_printf(display_text, "總共分析了 %d 行\n", analysis_result->line_count);
+                    if (filtered_lines > 0) {
+                        g_string_append_printf(display_text, "⚠️  將被過濾: %d 行 (col6或col7為0)\n", filtered_lines);
+                    }
 
-            // 添加文件格式建議
-            if (is_elevation_format) {
-                g_string_append_printf(display_text, "\n高程數據格式建議:\n");
-                g_string_append_printf(display_text, "• 使用 '/' 作為分隔符\n");
-                g_string_append_printf(display_text, "• 確保有7個字段\n");
-                g_string_append_printf(display_text, "• 數值字段保持適當精確度\n");
-                g_string_append_printf(display_text, "• col6與col7非0的行會被處理\n");
-            }
-
-            // 更新界面 - 根據當前活動標籤頁選擇正確的文本緩衝區
-            GtkTextBuffer *target_buffer = state->text_buffer;  // 預設使用角度分析的緩衝區
-
-            // 檢查當前活動標籤頁
-            if (state->notebook) {
-                int current_page = gtk_notebook_get_current_page(GTK_NOTEBOOK(state->notebook));
-                // 如果是高程轉換標籤頁（設為第一個標籤頁，索引 1），使用高程緩衝區
-                if (current_page == 1 && state->altitude_text_buffer) {
-                    target_buffer = state->altitude_text_buffer;
+                    int invalid_lines = total_data_lines - valid_lines;
+                    if (invalid_lines > 0) {
+                        g_string_append_printf(display_text, "❌ 格式不符: %d 行\n", invalid_lines);
+                    }
                 }
+
+                g_string_append_printf(display_text, "\n前 %d 行樣本內容:\n", analysis_result->line_count);
+                g_string_append_printf(display_text, "===========================\n");
+
+                // 顯示前幾行的樣本內容
+                for (int i = 0; i < MIN(analysis_result->line_count, 3); i++) {
+                    g_string_append_printf(display_text, "第 %d 行: %s\n", i + 1, analysis_result->lines[i]);
+                }
+
+                if (analysis_result->line_count > 3) {
+                    g_string_append_printf(display_text, "... (還有 %d 行)\n", analysis_result->line_count - 3);
+                }
+
+                g_string_append_printf(display_text, "\n===========================\n");
+                g_string_append_printf(display_text, "總共分析了 %d 行 • 有效數據行: %d\n",
+                                     analysis_result->line_count, valid_lines);
+
+                // 添加詳細的格式建議
+                g_string_append_printf(display_text, "\n📋 格式檢查清單:\n");
+                if (valid_lines < total_data_lines * 0.8) { // 如果有效行少於80%
+                    g_string_append_printf(display_text, "❌ 使用 '/' 作為分隔符\n");
+                    g_string_append_printf(display_text, "❌ 確保每行有7個字段\n");
+                } else {
+                    g_string_append_printf(display_text, "✅ 使用 '/' 作為分隔符\n");
+                    g_string_append_printf(display_text, "✅ 每行有7個字段\n");
+                }
+                g_string_append_printf(display_text, "ℹ️ 數值字段應有適當精確度\n");
+                if (filtered_lines > 0) {
+                    g_string_append_printf(display_text, "⚠️ col6與col7為0的行會被過濾\n");
+                } else {
+                    g_string_append_printf(display_text, "✅ 數據行不會被過濾\n");
+                }
+
+                g_string_append_printf(display_text, "\n🔧 常見問題修復:\n");
+                g_string_append_printf(display_text, "• 檢查是否有額外空格或隱藏字符\n");
+                g_string_append_printf(display_text, "• 確保datetime格式正確 (YYYY/MM/DD/HH:MM:SS.mmm)\n");
+                g_string_append_printf(display_text, "• 確認數值字段沒有非數字字符\n");
+                g_string_append_printf(display_text, "• 使用UTF-8編碼保存文件\n");
+
+            } else {
+                // 角度數據格式分析 - 保持原有的詳細顯示
+                g_string_append_printf(display_text, "檔案格式: 角度數據 (變動欄位)\n\n");
+
+                g_string_append_printf(display_text, "前 %d 行內容:\n", analysis_result->line_count);
+                g_string_append_printf(display_text, "==================\n");
+
+                for (int i = 0; i < analysis_result->line_count; i++) {
+                    g_string_append_printf(display_text, "第 %d 行: %s\n", i + 1, analysis_result->lines[i]);
+                }
+
+                if (analysis_result->line_count == 0) {
+                    g_string_append(display_text, "(檔案是空的)\n");
+                }
+
+                g_string_append_printf(display_text, "==================\n");
+                g_string_append_printf(display_text, "總共分析了 %d 行\n", analysis_result->line_count);
             }
+
+    // 更新界面 - 根據當前活動標籤頁選擇正確的文本緩衝區和視圖
+    GtkTextBuffer *target_buffer = state->text_buffer;  // 預設使用角度分析的緩衝區
+    GtkTextView *target_view = GTK_TEXT_VIEW(state->result_text_view);  // 預設使用角度分析的視圖
+
+    // 檢查當前活動標籤頁
+    if (state->notebook) {
+        int current_page = gtk_notebook_get_current_page(GTK_NOTEBOOK(state->notebook));
+        // 如果是高程轉換標籤頁（索引 1），使用高程緩衝區和視圖
+        if (current_page == 1 && state->altitude_text_buffer && state->altitude_text_view) {
+            target_buffer = state->altitude_text_buffer;
+            target_view = GTK_TEXT_VIEW(state->altitude_text_view);
+        }
+    }
 
     // 儲存選擇的檔案路徑（用於高程轉換）
     g_free(state->selected_file_path);
@@ -330,6 +437,16 @@ void on_select_file(GtkWidget *widget, gpointer data) {
 
     gtk_text_buffer_set_text(target_buffer, display_text->str, -1);
     g_string_free(display_text, TRUE);
+
+    // 使用延遲捲動確保文本渲染完成後再捲動
+    if (target_view) {
+        ScrollData *scroll_data = g_new(ScrollData, 1);
+        scroll_data->text_view = target_view;
+        scroll_data->buffer = target_buffer;
+
+        // 使用 g_idle_add 延遲捲動，確保文本完全渲染後再捲動
+        g_idle_add((GSourceFunc)delayed_scroll_to_end, scroll_data);
+    }
 
     char *status_text = g_strdup_printf("已分析檔案: %s", filename);
     gtk_label_set_text(GTK_LABEL(state->status_label), status_text);
@@ -402,7 +519,54 @@ void on_select_sep_file(GtkWidget *widget, gpointer data) {
         g_free(state->selected_sep_path);
         state->selected_sep_path = g_strdup(filename);
 
-        char *status_text = g_strdup_printf("已選擇SEP檔案: %s", filename);
+        // 在結果區域顯示SEP檔案確認訊息 (追加到現有文字後)
+        GString *confirm_text = g_string_new("\n");
+        g_string_append_printf(confirm_text, "SEP檔案確認:\n");
+        g_string_append_printf(confirm_text, "================\n");
+        g_string_append_printf(confirm_text, "SEP檔案已選擇\n");
+        g_string_append_printf(confirm_text, "檔案路徑: %s\n", filename);
+        g_string_append_printf(confirm_text, "\n此SEP檔案將用於高程轉換的地理空間插值處理。\n");
+
+        // 根據當前活動標籤頁選擇正確的緩衝區和視圖
+        GtkTextBuffer *target_buffer = state->text_buffer;
+        GtkTextView *target_view = GTK_TEXT_VIEW(state->result_text_view);  // 修正為正確的成員名稱
+
+        if (state->notebook) {
+            int current_page = gtk_notebook_get_current_page(GTK_NOTEBOOK(state->notebook));
+            // 如果是高程轉換標籤頁（索引 1），使用高程緩衝區和視圖
+            if (current_page == 1 && state->altitude_text_buffer && state->altitude_text_view) {
+                target_buffer = state->altitude_text_buffer;
+                target_view = GTK_TEXT_VIEW(state->altitude_text_view);
+            }
+        }
+
+        // 獲取現有文字並追加新訊息
+        GtkTextIter start_iter, end_iter;
+        gtk_text_buffer_get_start_iter(target_buffer, &start_iter);
+        gtk_text_buffer_get_end_iter(target_buffer, &end_iter);
+        char *existing_text = gtk_text_buffer_get_text(target_buffer, &start_iter, &end_iter, FALSE);
+
+        GString *new_text = g_string_new(existing_text ? existing_text : "");
+        g_string_append(new_text, confirm_text->str);
+
+        gtk_text_buffer_set_text(target_buffer, new_text->str, -1);
+
+        g_free(existing_text);
+        g_string_free(confirm_text, TRUE);
+        g_string_free(new_text, TRUE);
+
+        // 使用延遲捲動確保文本渲染完成後再捲動
+        if (target_view) {
+            // 創建一個包含視圖引用的結構，供延遲函數使用
+            ScrollData *scroll_data = g_new(ScrollData, 1);
+            scroll_data->text_view = target_view;
+            scroll_data->buffer = target_buffer;
+
+            // 使用 g_idle_add 延遲捲動，確保文本完全渲染後再捲動
+            g_idle_add((GSourceFunc)delayed_scroll_to_end, scroll_data);
+        }
+
+        char *status_text = g_strdup_printf("SEP檔案已確認: %s", filename);
         gtk_label_set_text(GTK_LABEL(state->status_label), status_text);
         g_free(status_text);
         g_free(filename);
@@ -422,15 +586,19 @@ typedef struct {
     char progress_text[200];
 } ElevationProcessData;
 
+
+
 // 更新進度條的回調函數（線程安全）
 static gboolean update_progress_callback(gpointer user_data) {
     ElevationProcessData *data = (ElevationProcessData*)user_data;
 
     if (data->app_state->elevation_progress_bar) {
-        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(data->app_state->elevation_progress_bar),
-                                     data->current_progress);
-        gtk_progress_bar_set_text(GTK_PROGRESS_BAR(data->app_state->elevation_progress_bar),
-                                 data->progress_text);
+        // 正確設置進度：將百分比轉為0.0-1.0範圍
+        double fraction = data->current_progress / 100.0;
+        fraction = CLAMP(fraction, 0.0, 1.0); // 確保範圍正確
+
+        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(data->app_state->elevation_progress_bar), fraction);
+        gtk_progress_bar_set_text(GTK_PROGRESS_BAR(data->app_state->elevation_progress_bar), data->progress_text);
     }
 
     return FALSE; // 只執行一次
@@ -440,6 +608,21 @@ static gboolean update_progress_callback(gpointer user_data) {
 static gboolean update_result_callback(gpointer user_data) {
     ElevationProcessData *data = (ElevationProcessData*)user_data;
     AppState *state = data->app_state;
+
+    // 恢復按鈕狀態 - 重新啟用執行按鈕，禁用停止按鈕
+    GtkWidget *convert_button = GTK_WIDGET(g_object_get_data(G_OBJECT(state->window), "convert_button"));
+    if (convert_button) {
+        gtk_widget_set_sensitive(convert_button, TRUE);
+    }
+
+    GtkWidget *stop_button = GTK_WIDGET(g_object_get_data(G_OBJECT(state->window), "elevation_stop_button"));
+    if (stop_button) {
+        gtk_widget_set_sensitive(stop_button, FALSE);
+    }
+
+    // 重置處理狀態
+    state->is_processing = FALSE;
+    set_cancel_requested(state, FALSE);
 
     // 更新狀態標籤
     if (data->error) {
@@ -498,10 +681,32 @@ static void* elevation_conversion_worker(void *user_data) {
     progress_update_callback(0.0, "準備處理...");
 
     // 調用高程轉換處理函數（使用回調版本）
-    extern gboolean process_elevation_conversion_with_callback(const char*, const char*, GString*, GError**, void (*)(double, const char*));
+    // 添加取消檢查的包裝函數 - 直接在進度回調中強制終止處理
+
+    void progress_callback_with_cancel(double percentage, const char *message) {
+        // 先檢查取消請求 - 如果請求取消，立即設定錯誤（這會讓函數立即返回，並結束處理）
+        if (is_cancel_requested(data->app_state)) {
+            // 如果請求取消，設定錯誤，中斷當前處理
+            g_print("[CANCEL] 強力取消：設定錯誤，中斷處理循環\n");
+            g_set_error(&data->error, G_IO_ERROR, G_IO_ERROR_CANCELLED, "操作已取消");
+            return; // 不執行進度更新，讓錯誤向上傳播
+        }
+
+        // 正常執行進度更新
+        progress_update_callback(percentage, message);
+    }
+
+
     if (!process_elevation_conversion_with_callback(data->input_path, data->sep_path,
                                           data->result_text, &data->error,
-                                          progress_update_callback)) {
+                                          progress_callback_with_cancel)) {
+        // 檢查是否因為取消而失敗
+        if (data->error && g_error_matches(data->error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            // 如果是取消請求，清空error（因為這不是真正的錯誤）
+            g_error_free(data->error);
+            data->error = NULL;
+        }
+
         // 處理失敗 - 立即通知主線程
         g_idle_add(update_result_callback, data);
         g_free(ctx);
@@ -579,8 +784,9 @@ void on_perform_conversion(GtkWidget *widget, gpointer data) {
     process_data->current_progress = 0.0;
     strcpy(process_data->progress_text, "準備處理...");
 
-    // 更新按鈕狀態（禁用處理按鈕）
+    // 更新按鈕狀態（禁用處理按鈕，啟用停止按鈕）
     gtk_widget_set_sensitive(GTK_WIDGET(g_object_get_data(G_OBJECT(state->window), "convert_button")), FALSE);
+    gtk_widget_set_sensitive(GTK_WIDGET(g_object_get_data(G_OBJECT(state->window), "elevation_stop_button")), TRUE);
 
     // 設置狀態
     gtk_label_set_text(GTK_LABEL(state->status_label), "開始高程轉換...");
@@ -591,11 +797,14 @@ void on_perform_conversion(GtkWidget *widget, gpointer data) {
         gtk_progress_bar_set_text(GTK_PROGRESS_BAR(state->elevation_progress_bar), "準備處理...");
     }
 
-    // 創建工作線程
+    // 創建工作線程 - 支援強力取消
     GThread *worker_thread = g_thread_new("elevation_worker",
                                          elevation_conversion_worker,
                                          process_data);
 
     // 不等待線程結束，讓它在背景運行
     g_thread_unref(worker_thread);
+
+    // 儲存線程參考以便強力取消
+    g_object_set_data(G_OBJECT(state->window), "elevation_worker_thread", worker_thread);
 }
