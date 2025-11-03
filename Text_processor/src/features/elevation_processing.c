@@ -8,6 +8,58 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+
+// 非同步統計行數的資料結構
+typedef struct {
+    const char *input_path;
+    volatile int *total_lines_ptr;  // 指向總行數變數
+    volatile gboolean *counting_done_ptr;  // 統計完成標記
+    volatile gboolean *cancel_counting_ptr; // 取消統計標記
+    volatile int *known_total_lines_ptr;    // 主線程的已知總行數
+    GMutex *counting_mutex;  // 保護共享變數
+    GCond *counting_cond;    // 條件變數，用於通知主線程
+} CountingData;
+
+// 背景統計行數的線程函數
+static gpointer counting_thread_func(gpointer data) {
+    CountingData *counting_data = (CountingData *)data;
+
+    FILE *count_file = fopen(counting_data->input_path, "r");
+    if (!count_file) {
+        g_mutex_lock(counting_data->counting_mutex);
+        *counting_data->counting_done_ptr = TRUE;
+        g_cond_signal(counting_data->counting_cond);
+        g_mutex_unlock(counting_data->counting_mutex);
+        return NULL;
+    }
+
+    char line[8192];
+    int lines_count = 0;
+
+    // 統計行數
+    while (fgets(line, sizeof(line), count_file)) {
+        // 檢查取消請求
+        if (*counting_data->cancel_counting_ptr) {
+            break;
+        }
+
+        g_strstrip(line);
+        if (strlen(line) > 0 && line[0] != ';') {
+            lines_count++;
+        }
+    }
+
+    fclose(count_file);
+
+    // 通知主線程統計完成
+    g_mutex_lock(counting_data->counting_mutex);
+    *counting_data->counting_done_ptr = TRUE;
+    *counting_data->known_total_lines_ptr = lines_count;  // 在鎖內更新統計結果
+    g_cond_signal(counting_data->counting_cond);  // 發出完成訊號
+    g_mutex_unlock(counting_data->counting_mutex);
+
+    return NULL;
+}
 #include "../../include/callbacks.h"  // 引入 TideDataRow 和 parse_tide_data_row
 
 // Hash table 配置
@@ -419,8 +471,8 @@ static SepDataStructure* load_sep_file_optimized(const char *sep_path) {
 
 
 
-// 生成輸出文件名（在原文件名後加上 "_converted"）
-static char* generate_output_filename(const char *input_path) {
+// 生成轉換後文件名（完整處理）
+static char* generate_converted_filename(const char *input_path) {
     // 查找文件擴展名
     const char *dot_pos = strrchr(input_path, '.');
     if (!dot_pos) {
@@ -429,7 +481,7 @@ static char* generate_output_filename(const char *input_path) {
 
     // 從擴展名前插入 "_converted"
     size_t path_len = dot_pos - input_path;
-    char *result = g_new(char, path_len + 20); // 多預留空間
+    char *result = g_new(char, path_len + 17); // 多預留空間
 
     // 複製路徑和文件名（不含擴展名）
     memcpy(result, input_path, path_len);
@@ -492,80 +544,116 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
     g_string_append_printf(result_text, "已載入 %d 個SEP對照點 (空間網格索引最終版本)\n", sep_data->hash_table->count);
 
     // 2. 生成輸出文件名
-    char *output_path = generate_output_filename(input_path);
-    g_string_append_printf(result_text, "輸出檔案: %s\n\n", output_path);
+    char *converted_path = generate_converted_filename(input_path);
+    char *temp_filtered_path = g_strdup_printf("%s.filtered_temp", input_path);
+    g_string_append_printf(result_text, "轉換後檔案: %s\n", converted_path);
+    g_string_append_printf(result_text, "原始檔案將被修改為過濾後版本\n\n");
 
-    // 3. 打開輸入和輸出文件
+    // 3. 打開輸入檔案和輸出檔案
     FILE *input_file = fopen(input_path, "r");
     if (!input_file) {
         g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_FAILED, "無法打開輸入檔案: %s", input_path);
         sep_data_free(sep_data);
-        g_free(output_path);
+        g_free(converted_path);
+        g_free(temp_filtered_path);
         return FALSE;
     }
 
-    FILE *output_file = fopen(output_path, "w");
-    if (!output_file) {
-        g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_FAILED, "無法創建輸出檔案: %s", output_path);
+    FILE *converted_file = fopen(converted_path, "w");
+    if (!converted_file) {
+        g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_FAILED, "無法創建轉換檔案: %s", converted_path);
         fclose(input_file);
         sep_data_free(sep_data);
-        g_free(output_path);
+        g_free(converted_path);
+        g_free(temp_filtered_path);
         return FALSE;
     }
 
-    // 4. 先使用類似 wc -l 的方法統計總行數
+    FILE *temp_filtered_file = fopen(temp_filtered_path, "w");
+    if (!temp_filtered_file) {
+        g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_FAILED, "無法創建臨時過濾檔案: %s", temp_filtered_path);
+        fclose(input_file);
+        fclose(converted_file);
+        sep_data_free(sep_data);
+        g_free(converted_path);
+        g_free(temp_filtered_path);
+        return FALSE;
+    }
+
+    // 4. 初始化計數器和非同步統計
     int total_lines = 0;
     int processed_lines = 0;
     int filtered_lines = 0;
     int matched_lines = 0;
     int interpolated_lines = 0;
 
-    // 使用指针追路和fgets統計總行數（類似 wc -l）
-    char temp_line[1024];
-    rewind(input_file); // 確保從文件開頭開始
-    while (fgets(temp_line, sizeof(temp_line), input_file)) {
-        // 簡單檢查是否為有效數據行（非空行和非註釋行）
-        g_strstrip(temp_line);
-        if (strlen(temp_line) > 0 && temp_line[0] != ';') {
-            total_lines++;
-        }
-    }
-    fseek(input_file, 0, SEEK_SET); // 重新回到文件開頭
+    // 初始化非同步統計
+    gboolean counting_done = FALSE;
+    gboolean cancel_counting = FALSE;
+    GMutex counting_mutex;
+    GCond counting_cond;
 
-    g_string_append_printf(result_text, "使用快速計數獲得總行數: %d\n\n", total_lines);
+    g_mutex_init(&counting_mutex);
+    g_cond_init(&counting_cond);
 
-    g_string_append_printf(result_text, "開始處理，共 %d 行數據...\n", total_lines);
+    // 使用更大的緩衝區來提高讀取效率
+    char temp_line[8192];  // 8KB緩衝區
 
-    // 5. 逐行處理 - 通過進度回調支持多線程UI更新
+    g_string_append_printf(result_text, "開始處理數據（背景統計總行數）...\n");
+
+    // 5. 逐行處理 - 支援非同步統計和取消
     int current_line = 0;
-    // 根據總行數動態調整進度更新間隔 - 支援超快速取消，每10行檢查一次狀態
-    int progress_update_interval = MAX(1, MIN(10, total_lines / 10000)); // 每處理總行數的0.01%更新一次，支持超快速取消，最小頻率1行檢查一次
     int lines_since_last_update = 0;
+    int known_total_lines = 0;  // 已知的總行數
+
+    CountingData counting_data = {
+        .input_path = input_path,
+        .total_lines_ptr = &total_lines,
+        .counting_done_ptr = &counting_done,
+        .cancel_counting_ptr = &cancel_counting,
+        .known_total_lines_ptr = &known_total_lines,  // 指向主線程的變數
+        .counting_mutex = &counting_mutex,
+        .counting_cond = &counting_cond
+    };
+
+    // 啟動背景統計線程
+    GThread *counting_thread = g_thread_new("counting-thread", counting_thread_func, &counting_data);
 
     while (fgets(temp_line, sizeof(temp_line), input_file)) {
+        current_line++;
+        total_lines++;  // 動態統計總行數
+
         // 🔥 **強力取消檢查：每一行開始就檢查** 🔥
-        // 直接檢查AppState中的取消標記，不依賴進度回調
-
-        // 模擬取回AppState（從user_data或其他方式）
-        // 為了強力終止，我們直接設定取消錯誤
-
-        // 檢查進度更新和取消請求的組合
         lines_since_last_update++;
-        if (lines_since_last_update >= progress_update_interval ||
-            current_line == total_lines ||
-            current_line % progress_update_interval == 0) {
+        if (lines_since_last_update >= 10000 || current_line % 10000 == 0) {  // 檢查統計更新
 
-            // 進行進度更新，並檢查如果進度回調有問題就立即停止
+            // 檢查統計狀態（確保記憶體可見性）
+            if (known_total_lines == 0) {
+                g_mutex_lock(&counting_mutex);
+                // 統計線程已經在鎖內設定了 known_total_lines
+                // 這裡只需要確保可見性
+                g_mutex_unlock(&counting_mutex);
+            }
+
+            // 進行進度更新
             if (progress_callback) {
-                double progress = (double)current_line / total_lines;
-                char cancel_check_message[50];
-                sprintf(cancel_check_message, "Processing: %d/%d(%.1f%%)", current_line, total_lines, progress * 100.0);
-                progress_callback(progress * 100.0, cancel_check_message); // 傳遞真實進度百分比
+                char progress_message[150];
+                if (known_total_lines > 0) {
+                    // 統計已完成，顯示精確進度
+                    double progress = (double)current_line / known_total_lines;
+                    sprintf(progress_message, "處理中: %d/%d (%.1f%%)", current_line, known_total_lines, progress * 100.0);
+                    progress_callback(progress * 100.0, progress_message);
+                } else {
+                    // 統計尚未完成，顯示已處理行數
+                    sprintf(progress_message, "處理中: 已處理 %d 行 (統計總行數中...)", current_line);
+                    progress_callback(-1.0, progress_message);
+                }
 
                 // 檢查取消請求
                 if (error && *error && g_error_matches(*error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
-                    g_print("[CANCEL] 檢測到取消請求，正在終止處理循環\n");
-                    break; // 立即跳出處理循環
+                    g_print("[CANCEL] 檢測到取消請求，正在終止處理循環和統計線程\n");
+                    cancel_counting = TRUE;  // 取消統計線程
+                    break;  // 立即跳出處理循環
                 }
             }
 
@@ -576,8 +664,6 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
                 gtk_main_iteration();
             }
         }
-
-        current_line++;
 
 
 
@@ -594,12 +680,15 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
             continue; // 不寫入輸出文件，直接跳過
         }
 
+        // 寫入過濾後檔案（原始格式，不進行轉換）
+        fputs(temp_line, temp_filtered_file);
+
         // 使用距離加權插值查找SEP對照值 (總是都會進行插值處理)
         double exact_adjustment = sep_hash_lookup(sep_data->hash_table, row.longitude, row.latitude);
         double interpolated_adjustment = sep_grid_lookup_with_interpolation(sep_data->spatial_grid,
                                                                            row.longitude, row.latitude);
 
-        char output_line[1024];
+        char converted_line[1024];
         gboolean has_exact_match = (exact_adjustment > -99998.0);
         gboolean has_interpolation = (interpolated_adjustment > -99998.0);
 
@@ -621,22 +710,94 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
         row.tide += final_adjustment;
         row.processed_depth -= final_adjustment;
 
-        // 格式化輸出行（保持原始格式，所有資料都處理）
-        snprintf(output_line, sizeof(output_line),
+        // 格式化轉換後輸出行（保持原始格式，所有資料都處理）
+        snprintf(converted_line, sizeof(converted_line),
                 "%s/%.3f/%.7f/%.7f/%.3f/%.3f/%.3f\n",
                 row.datetime, row.tide, row.longitude, row.latitude,
                 row.processed_depth, row.col6, row.col7);
 
-        // 寫入輸出文件 - 所有有效資料都必須寫入
-        fputs(output_line, output_file);
+        // 寫入轉換後檔案
+        fputs(converted_line, converted_file);
         processed_lines++;
     }
 
-    // 6. 清理資源
+    // 6. 清理資源並覆蓋原始檔案為過濾版本
     fclose(input_file);
-    fclose(output_file);
+    fclose(temp_filtered_file);
+    fclose(converted_file);
+
+    // 用過濾後的臨時檔案覆蓋原始檔案
+    if (rename(temp_filtered_path, input_path) != 0) {
+        // 顯示詳細的rename錯誤信息
+        g_print("[ERROR] rename() 失敗: %s -> %s\n", temp_filtered_path, input_path);
+        g_print("[ERROR] 錯誤代碼: %d, 錯誤訊息: %s\n", errno, strerror(errno));
+
+        // 如果 rename 失敗，嘗試複製刪除的方法
+        g_print("[INFO] 嘗試備用方案：複製檔案內容...\n");
+
+        FILE *src = fopen(temp_filtered_path, "rb");
+        FILE *dst = fopen(input_path, "wb");
+
+        g_print("[DEBUG] 開啟檔案: src=%s (%p), dst=%s (%p)\n", temp_filtered_path, src, input_path, dst);
+
+        if (src && dst) {
+            char buffer[8192];
+            size_t bytes;
+            gboolean copy_success = TRUE;
+            size_t total_bytes = 0;
+
+            g_print("[DEBUG] 開始複製檔案內容...\n");
+
+            while ((bytes = fread(buffer, 1, sizeof(buffer), src)) > 0) {
+                total_bytes += bytes;
+                if (fwrite(buffer, 1, bytes, dst) != bytes) {
+                    copy_success = FALSE;
+                    g_print("[ERROR] fwrite() 失敗: 寫入 %zu 位元組失敗，錯誤: %s\n", bytes, strerror(errno));
+                    break;
+                }
+            }
+
+            g_print("[DEBUG] 複製完成，共複製 %zu 位元組\n", total_bytes);
+
+            fclose(src);
+            fclose(dst);
+
+            if (copy_success) {
+                // 刪除臨時檔案
+                if (remove(temp_filtered_path) == 0) {
+                    g_print("[SUCCESS] 檔案覆蓋成功，使用備用方案\n");
+                } else {
+                    g_print("[WARNING] 無法刪除臨時檔案: %s (錯誤: %s)\n", temp_filtered_path, strerror(errno));
+                }
+            } else {
+                g_print("[ERROR] 檔案複製失敗，設定錯誤並返回\n");
+                g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_FAILED,
+                           "無法複製過濾結果到原始檔案: %s", input_path);
+                sep_data_free(sep_data);
+                g_free(converted_path);
+                g_free(temp_filtered_path);
+                return FALSE;
+            }
+        } else {
+            if (src) fclose(src);
+            if (dst) fclose(dst);
+            g_print("[ERROR] 無法開啟檔案進行複製: src=%p, dst=%p\n", src, dst);
+            if (!src) g_print("[ERROR] 無法開啟來源檔案: %s (錯誤: %s)\n", temp_filtered_path, strerror(errno));
+            if (!dst) g_print("[ERROR] 無法開啟目標檔案: %s (錯誤: %s)\n", input_path, strerror(errno));
+            g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_FAILED,
+                       "無法開啟檔案進行複製: %s", input_path);
+            sep_data_free(sep_data);
+            g_free(converted_path);
+            g_free(temp_filtered_path);
+            return FALSE;
+        }
+    } else {
+        g_print("[SUCCESS] 檔案覆蓋成功，使用 rename()\n");
+    }
+
     sep_data_free(sep_data);
-    g_free(output_path);
+    g_free(converted_path);
+    g_free(temp_filtered_path);
 
     // 記錄結束時間並計算處理時間
     time_t end_time = time(NULL);
@@ -666,7 +827,18 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
     g_string_append_printf(result_text, "處理時間: %.2f 秒\n", processing_time);
 
     g_string_append_printf(result_text, "\n高程轉換完成！✅\n");
+    g_string_append_printf(result_text, "📊 資料處理統計：\n");
+    g_string_append_printf(result_text, "   • 移除了 %d 筆無效資料 (col6或col7為0)\n", filtered_lines);
+    g_string_append_printf(result_text, "   • 保留了 %d 筆有效資料\n", processed_lines);
+    g_string_append_printf(result_text, "📄 輸出檔案：\n");
+    g_string_append_printf(result_text, "   • 過濾後檔案：原始檔案已被修改為過濾版本\n");
+    g_string_append_printf(result_text, "   • 轉換後檔案：%s\n", converted_path);
     g_string_append_printf(result_text, "🎯 地理空間插值功能成功啟用\n");
+
+    // 等待統計線程完成並清理資源
+    g_thread_join(counting_thread);
+    g_mutex_clear(&counting_mutex);
+    g_cond_clear(&counting_cond);
 
     return TRUE;
 }
