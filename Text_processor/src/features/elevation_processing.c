@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 #include "../../include/callbacks.h"  // 引入 TideDataRow 和 parse_tide_data_row
 
 // Hash table 配置
@@ -473,6 +474,9 @@ gboolean process_elevation_conversion(const char *input_path, const char *sep_pa
 // 主處理函數 - 高程轉換處理 (支援進度回調)
 gboolean process_elevation_conversion_with_callback(const char *input_path, const char *sep_path,
                                     GString *result_text, GError **error, void (*progress_callback)(double, const char*)) {
+    // 記錄開始時間
+    time_t start_time = time(NULL);
+
     g_string_append_printf(result_text, "開始處理高程轉換：\n");
     g_string_append_printf(result_text, "===========================================\n");
     g_string_append_printf(result_text, "輸入檔案: %s\n", input_path);
@@ -553,9 +557,9 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
 
             // 進行進度更新，並檢查如果進度回調有問題就立即停止
             if (progress_callback) {
-                char cancel_check_message[50];
-                sprintf(cancel_check_message, "Processing: %d/%d", current_line, total_lines);
                 double progress = (double)current_line / total_lines;
+                char cancel_check_message[50];
+                sprintf(cancel_check_message, "Processing: %d/%d(%.1f%%)", current_line, total_lines, progress * 100.0);
                 progress_callback(progress * 100.0, cancel_check_message); // 傳遞真實進度百分比
 
                 // 檢查取消請求
@@ -634,6 +638,10 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
     sep_data_free(sep_data);
     g_free(output_path);
 
+    // 記錄結束時間並計算處理時間
+    time_t end_time = time(NULL);
+    double processing_time = difftime(end_time, start_time);
+
     // 7. 最終報告
     g_string_append_printf(result_text, "\n轉換完成統計:\n");
     g_string_append_printf(result_text, "===========================================\n");
@@ -653,6 +661,9 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
     g_string_append_printf(result_text, "精確匹配率: %.1f%%\n", exact_match_rate);
     g_string_append_printf(result_text, "插值匹配率: %.1f%%\n", interpolation_rate);
     g_string_append_printf(result_text, "總匹配率: %.1f%%\n", total_match_rate);
+
+    g_string_append_printf(result_text, "\n處理時間統計:\n");
+    g_string_append_printf(result_text, "處理時間: %.2f 秒\n", processing_time);
 
     g_string_append_printf(result_text, "\n高程轉換完成！✅\n");
     g_string_append_printf(result_text, "🎯 地理空間插值功能成功啟用\n");
