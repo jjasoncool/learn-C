@@ -630,19 +630,44 @@ static gboolean update_result_callback(gpointer user_data) {
         gtk_label_set_text(GTK_LABEL(state->status_label), error_message);
 
         if (state->altitude_text_buffer) {
-            // 追加錯誤訊息，而不是清除內容
-            GtkTextIter end_iter;
-            gtk_text_buffer_get_end_iter(state->altitude_text_buffer, &end_iter);
-            if (g_strcmp0(error_message, "操作已取消") == 0) {
-                // 取消訊息用不同格式
+            // 檢查是否為取消錯誤
+            if (g_error_matches(data->error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+                // 取消情況：不清除結果框，只追加取消訊息
+                GtkTextIter end_iter;
+                gtk_text_buffer_get_end_iter(state->altitude_text_buffer, &end_iter);
                 gtk_text_buffer_insert(state->altitude_text_buffer, &end_iter,
-                                      "\n\n處理已取消！", -1);
+                                      "\n\n⚠️ 處理已被用戶取消", -1);
+
+                // 更新進度條顯示取消狀態
+                if (state->elevation_progress_bar) {
+                    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(state->elevation_progress_bar), 0.0);
+                    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(state->elevation_progress_bar), "處理已取消");
+                }
+
+                // 使用延遲捲動確保文本渲染完成後再捲動（模仿檔案選擇的捲動方式）
+                if (state->altitude_text_view) {
+                    ScrollData *scroll_data = g_new(ScrollData, 1);
+                    scroll_data->text_view = GTK_TEXT_VIEW(state->altitude_text_view);
+                    scroll_data->buffer = state->altitude_text_buffer;
+
+                    // 使用 g_idle_add 延遲捲動，確保文本完全渲染後再捲動
+                    g_idle_add((GSourceFunc)delayed_scroll_to_end, scroll_data);
+                }
             } else {
+                // 其他錯誤：追加錯誤訊息，而不是清除內容
+                GtkTextIter end_iter;
+                gtk_text_buffer_get_end_iter(state->altitude_text_buffer, &end_iter);
                 gtk_text_buffer_insert(state->altitude_text_buffer, &end_iter,
-                                      g_strdup_printf("\n\n錯誤：%s", error_message), -1);
+                                      g_strdup_printf("\n\n❌ 錯誤：%s", error_message), -1);
+
+                // 對於其他錯誤也捲動到底部
+                if (state->altitude_text_view) {
+                    gtk_text_view_scroll_to_iter(GTK_TEXT_VIEW(state->altitude_text_view), &end_iter, 0.0, TRUE, 0.0, 1.0);
+                }
             }
         }
     } else {
+        // 成功完成：顯示完整結果
         gtk_label_set_text(GTK_LABEL(state->status_label), "高程轉換完成");
 
         if (state->altitude_text_buffer) {
@@ -716,13 +741,6 @@ static void* elevation_conversion_worker(void *user_data) {
     if (!process_elevation_conversion_with_callback(data->input_path, data->sep_path,
                                           data->result_text, &data->error,
                                           progress_callback_with_cancel)) {
-        // 檢查是否因為取消而失敗
-        if (data->error && g_error_matches(data->error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
-            // 如果是取消請求，清空error（因為這不是真正的錯誤）
-            g_error_free(data->error);
-            data->error = NULL;
-        }
-
         // 處理失敗 - 立即通知主線程
         g_idle_add(update_result_callback, data);
         g_free(ctx);
@@ -809,6 +827,22 @@ void on_perform_conversion(GtkWidget *widget, gpointer data) {
 
     // 設置狀態
     gtk_label_set_text(GTK_LABEL(state->status_label), "開始高程轉換...");
+
+    // 在結果框內新增開始處理訊息
+    if (state->altitude_text_buffer) {
+        GtkTextIter end_iter;
+        gtk_text_buffer_get_end_iter(state->altitude_text_buffer, &end_iter);
+        gtk_text_buffer_insert(state->altitude_text_buffer, &end_iter,
+                              "\n\n🚀 開始高程轉換處理...\n", -1);
+
+        // 自動捲動到新訊息
+        if (state->altitude_text_view) {
+            ScrollData *scroll_data = g_new(ScrollData, 1);
+            scroll_data->text_view = GTK_TEXT_VIEW(state->altitude_text_view);
+            scroll_data->buffer = state->altitude_text_buffer;
+            g_idle_add((GSourceFunc)delayed_scroll_to_end, scroll_data);
+        }
+    }
 
     // 重置進度條
     if (state->elevation_progress_bar) {

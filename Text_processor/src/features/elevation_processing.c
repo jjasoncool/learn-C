@@ -653,6 +653,19 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
                 if (error && *error && g_error_matches(*error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
                     g_print("[CANCEL] 檢測到取消請求，正在終止處理循環和統計線程\n");
                     cancel_counting = TRUE;  // 取消統計線程
+
+                    // 清理臨時檔案，防止覆蓋原始檔案
+                    if (temp_filtered_file) {
+                        fclose(temp_filtered_file);
+                        temp_filtered_file = NULL;
+                        remove(temp_filtered_path);  // 刪除臨時檔案
+                    }
+                    if (converted_file) {
+                        fclose(converted_file);
+                        converted_file = NULL;
+                        remove(converted_path);  // 刪除轉換檔案
+                    }
+
                     break;  // 立即跳出處理循環
                 }
             }
@@ -723,6 +736,34 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
 
     // 6. 清理資源並覆蓋原始檔案為過濾版本
     fclose(input_file);
+
+    // 檢查是否因為取消而提前退出
+    if (error && *error && g_error_matches(*error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        g_print("[CANCEL] 因為取消請求，跳過檔案覆蓋操作\n");
+
+        // 清理臨時檔案
+        if (temp_filtered_file) {
+            fclose(temp_filtered_file);
+            remove(temp_filtered_path);
+        }
+        if (converted_file) {
+            fclose(converted_file);
+            remove(converted_path);
+        }
+
+        sep_data_free(sep_data);
+        g_free(converted_path);
+        g_free(temp_filtered_path);
+
+        // 等待統計線程完成並清理資源
+        g_thread_join(counting_thread);
+        g_mutex_clear(&counting_mutex);
+        g_cond_clear(&counting_cond);
+
+        return FALSE;  // 返回失敗，因為操作被取消
+    }
+
+    // 關閉檔案
     fclose(temp_filtered_file);
     fclose(converted_file);
 

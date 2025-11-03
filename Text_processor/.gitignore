@@ -36,6 +36,7 @@ Makefile.cmake
 build/
 Build/
 bin/
+dist/
 obj/
 Debug/
 Release/
