@@ -26,12 +26,14 @@ LDFLAGS = $(shell pkg-config --libs gtk+-3.0)
 # 編譯模式設定 (預設為 release)
 BUILD_MODE ?= release
 
-# 根據編譯模式設定不同的 CFLAGS
+# 根據編譯模式設定不同的 CFLAGS 和 LDFLAGS
 ifeq ($(BUILD_MODE), debug)
     CFLAGS = $(BASE_CFLAGS) -g -DDEBUG -O0        # 除錯版本: 包含除錯資訊, 無優化
+    LDFLAGS_FINAL = $(LDFLAGS)                    # 除錯版本保留控制台
     TARGET_SUFFIX = _debug
 else
-    CFLAGS = $(BASE_CFLAGS) -O2 -DNDEBUG          # 正式版本: 優化編譯, 移除斷言, 保留控制台
+    CFLAGS = $(BASE_CFLAGS) -O2 -DNDEBUG -mwindows  # 正式版本: 優化編譯, 移除斷言, 隱藏控制台
+    LDFLAGS_FINAL = $(LDFLAGS)                    # 正式版本隱藏控制台
     TARGET_SUFFIX =
 endif
 
@@ -47,7 +49,7 @@ $(BUILD_DIR):
 
 # 編譯目標
 $(TARGET): $(OBJECTS)
-	$(CC) $(CFLAGS) -o $(TARGET) $(OBJECTS) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJECTS) $(LDFLAGS_FINAL)
 
 # 定義源文件搜索路徑
 vpath %.c $(SRC_DIR) $(SRC_DIR)/ui $(SRC_DIR)/ui/tabs $(SRC_DIR)/features
