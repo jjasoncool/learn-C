@@ -8,6 +8,13 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <float.h>   // DBL_MAX
+#ifndef MIN
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#endif
+#ifndef MAX
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
+#endif
 
 // 非同步統計行數的資料結構
 typedef struct {
@@ -19,6 +26,11 @@ typedef struct {
     GMutex *counting_mutex;  // 保護共享變數
     GCond *counting_cond;    // 條件變數，用於通知主線程
 } CountingData;
+
+typedef struct {
+    double distance;
+    double adjustment;
+} Neighbor2;
 
 // 背景統計行數的線程函數
 static gpointer counting_thread_func(gpointer data) {
@@ -253,79 +265,81 @@ static void spatial_grid_add_point(SpatialGrid *grid, double longitude, double l
 }
 
 // 使用空間網格的全域插值查詢 (確保總是能找到最近點)
+// 以「鄰域擴圈 + 早停」實作的插值查詢：O(k)，k 為近鄰 cell 的點數，遠小於全域掃描
+// 保留你原本的函式簽名；若原本名字/參數不同，請只改第一行宣告。
 static double sep_grid_lookup_with_interpolation(const SpatialGrid *grid,
-                                                double target_longitude,
-                                                double target_latitude) {
+                                                 double target_longitude,
+                                                 double target_latitude)
+{
     if (!grid) return -99999.0;
 
-    // 初始化最近點數組
-    NeighborPoint nearest_points[2];
-    int found_count = 0;
+    // 找出目標點所在 cell
+    int ci = 0, cj = 0;
+    lat_lon_to_grid_indices(grid, target_latitude, target_longitude, &ci, &cj);
+    if (ci < 0) ci = 0;
+    if (cj < 0) cj = 0;
+    if (ci >= grid->lat_grid_size) ci = grid->lat_grid_size - 1;
+    if (cj >= grid->lon_grid_size) cj = grid->lon_grid_size - 1;
 
-    // 初始化為極大距離
-    nearest_points[0].distance = G_MAXDOUBLE;
-    nearest_points[0].adjustment = -99999.0;
-    nearest_points[0].latitude = 0.0;
-    nearest_points[0].longitude = 0.0;
+    Neighbor2 best0 = { .distance = DBL_MAX, .adjustment = 0.0 };
+    Neighbor2 best1 = { .distance = DBL_MAX, .adjustment = 0.0 };
+    int found = 0;
 
-    nearest_points[1].distance = G_MAXDOUBLE;
-    nearest_points[1].adjustment = -99999.0;
-    nearest_points[1].latitude = 0.0;
-    nearest_points[1].longitude = 0.0;
+    // 最大擴圈半徑：覆蓋整個網格邊界即可
+    const int max_r = MAX(grid->lat_grid_size, grid->lon_grid_size);
+    for (int r = 0; r < max_r; ++r) {
 
-    // **全網格搜尋** - 遍歷所有網格，確保總是能找到最近的點
-    for (int lat_idx = 0; lat_idx < grid->lat_grid_size; lat_idx++) {
-        for (int lon_idx = 0; lon_idx < grid->lon_grid_size; lon_idx++) {
-            // 獲取這個網格的點陣列
-            SepPointArray *grid_array = grid->grids[lat_idx][lon_idx];
-            if (!grid_array || grid_array->count == 0) {
-                continue;
-            }
+        int imin = MAX(0, ci - r);
+        int imax = MIN(grid->lat_grid_size - 1, ci + r);
+        int jmin = MAX(0, cj - r);
+        int jmax = MIN(grid->lon_grid_size - 1, cj + r);
 
-            // 在這個網格中搜尋所有點
-            for (int i = 0; i < grid_array->count; i++) {
-                double distance = calculate_distance(target_latitude, target_longitude,
-                                                   grid_array->latitudes[i], grid_array->longitudes[i]);
+        // 掃「外圈」cell（避免重複掃描）
+        for (int i = imin; i <= imax; ++i) {
+            for (int j = jmin; j <= jmax; ++j) {
+                // 只掃外框
+                if (i != imin && i != imax && j != jmin && j != jmax) continue;
 
-                // 更新最近的兩個點（全域搜尋）
-                if (distance < nearest_points[0].distance) {
-                    // 移位第二近的點
-                    nearest_points[1] = nearest_points[0];
-                    // 設置最近的點
-                    nearest_points[0].distance = distance;
-                    nearest_points[0].adjustment = grid_array->adjustments[i];
-                    nearest_points[0].latitude = grid_array->latitudes[i];
-                    nearest_points[0].longitude = grid_array->longitudes[i];
-                    found_count = (found_count < 2) ? found_count + 1 : 2;
-                } else if (distance < nearest_points[1].distance && found_count >= 1) {
-                    // 更新第二近的點
-                    nearest_points[1].distance = distance;
-                    nearest_points[1].adjustment = grid_array->adjustments[i];
-                    nearest_points[1].latitude = grid_array->latitudes[i];
-                    nearest_points[1].longitude = grid_array->longitudes[i];
-                    found_count = 2;
+                SepPointArray *arr = grid->grids[i][j];
+                if (!arr || arr->count <= 0) continue;
+
+                // 掃描 cell 內所有點，維護兩個最近鄰
+                for (int k = 0; k < arr->count; ++k) {
+                    double d = calculate_distance(
+                        target_latitude,  target_longitude,
+                        arr->latitudes[k], arr->longitudes[k]);
+
+                    if (d < best0.distance) {
+                        best1 = best0;
+                        best0.distance = d;
+                        best0.adjustment = arr->adjustments[k];
+                    } else if (d < best1.distance) {
+                        best1.distance = d;
+                        best1.adjustment = arr->adjustments[k];
+                    }
                 }
             }
         }
+
+        // 兩個最近點都找到了就「早停」
+        if (best1.distance < DBL_MAX) {
+            found = 2;
+            break;
+        }
     }
 
-    // 距離加權線性插值
-    if (found_count >= 2) {
-        double d1 = nearest_points[0].distance;
-        double d2 = nearest_points[1].distance;
-        double a1 = nearest_points[0].adjustment;
-        double a2 = nearest_points[1].adjustment;
-
-        // 距離加權插值公式: result = (a2 * d1 + a1 * d2) / (d1 + d2)
-        double interpolated_adjustment = (a2 * d1 + a1 * d2) / (d1 + d2);
-        return interpolated_adjustment;
-    }
-    // 如果只有一個點，則直接使用最近的點
-    else if (found_count == 1) {
-        return nearest_points[0].adjustment;
+    if (found >= 2) {
+        // 兩近鄰距離反比權重
+        double d1 = best0.distance, d2 = best1.distance;
+        double a1 = best0.adjustment, a2 = best1.adjustment;
+        if (d1 + d2 == 0.0) return (a1 + a2) * 0.5; // 退化情況
+        return (a2 * d1 + a1 * d2) / (d1 + d2);
+    } else if (best0.distance < DBL_MAX) {
+        // 只有一個近鄰：直接回傳
+        return best0.adjustment;
     }
 
-    // 如果找不到任何點，則返回無法插值
+    // 找不到近鄰
     return -99999.0;
 }
 

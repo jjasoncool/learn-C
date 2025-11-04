@@ -20,8 +20,13 @@ OBJECTS = $(BUILD_DIR)/main.o $(BUILD_DIR)/scan.o $(BUILD_DIR)/angle_parser.o $(
 
 # GTK 相關的編譯和連結標誌
 # 使用 pkg-config 來取得 GTK3 的編譯參數
-BASE_CFLAGS = $(shell pkg-config --cflags gtk+-3.0) -Wall -Wextra -std=c99 -I$(INCLUDE_DIR)
-LDFLAGS = $(shell pkg-config --libs gtk+-3.0)
+BASE_CFLAGS = $(shell pkg-config --cflags gtk+-3.0) -Wall -Wextra -std=c99 -D_POSIX_C_SOURCE=200809L -I$(INCLUDE_DIR)
+LDFLAGS = $(shell pkg-config --libs gtk+-3.0) -lm
+
+# 作業系統檢測
+UNAME_S := $(shell uname -s)
+IS_WINDOWS := $(if $(findstring MINGW, $(UNAME_S)),1,0)
+IS_LINUX := $(if $(findstring Linux, $(UNAME_S)),1,0)
 
 # 編譯模式設定 (預設為 release)
 BUILD_MODE ?= release
@@ -32,13 +37,22 @@ ifeq ($(BUILD_MODE), debug)
     LDFLAGS_FINAL = $(LDFLAGS)                    # 除錯版本保留控制台
     TARGET_SUFFIX = _debug
 else
-    CFLAGS = $(BASE_CFLAGS) -O2 -DNDEBUG -mwindows  # 正式版本: 優化編譯, 移除斷言, 隱藏控制台
-    LDFLAGS_FINAL = $(LDFLAGS)                    # 正式版本隱藏控制台
+    # 正式版本: 優化編譯, 移除斷言
+    CFLAGS = $(BASE_CFLAGS) -O2 -DNDEBUG
+    # 只在Windows上添加 -mwindows 標誌來隱藏控制台
+    ifeq ($(IS_WINDOWS),1)
+        CFLAGS += -mwindows
+    endif
+    LDFLAGS_FINAL = $(LDFLAGS)                    # 正式版本隱藏控制台 (Windows)
     TARGET_SUFFIX =
 endif
 
-# 重新定義目標檔名
-TARGET = $(BUILD_DIR)/txt_processor$(TARGET_SUFFIX).exe
+# 重新定義目標檔名 (根據作業系統設定擴展名)
+ifeq ($(IS_WINDOWS),1)
+    TARGET = $(BUILD_DIR)/txt_processor$(TARGET_SUFFIX).exe
+else
+    TARGET = $(BUILD_DIR)/txt_processor$(TARGET_SUFFIX)
+endif
 
 # 預設目標
 all: $(BUILD_DIR) $(TARGET)
@@ -93,7 +107,7 @@ release:
 # 執行除錯版本
 run-debug:
 	$(MAKE) BUILD_MODE=debug
-	$(BUILD_DIR)/txt_processor_debug.exe
+	$(BUILD_DIR)/txt_processor_debug$(if $(IS_WINDOWS),.exe,)
 
 # 顯示目前編譯模式
 info:
