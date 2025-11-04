@@ -136,57 +136,116 @@ typedef struct {
 } FileAnalysisResult;
 
 // 解析Tide數據行
-gboolean parse_tide_data_row(const char *line, TideDataRow *row) {
-    // 創建副本進行解析
-    char *line_copy = g_strdup(line);
+// 潮汐資料格式描述結構 - 支援自訂格式
+typedef struct {
+    char delimiter;           // 欄位分隔符
+    int datetime_delimiters;  // datetime欄位結束的分隔符數量
+    int numeric_fields;       // 數值欄位數量
+} TideFormat;
 
-    // 第一個字段是datetime，到最後一個'/'為止
-    char *first_slash_pos = strchr(line_copy, '/');
-    if (!first_slash_pos || line_copy == first_slash_pos) {
-        g_free(line_copy);
-        return FALSE; // 無效格式
-    }
+// 預設格式定義（當前使用的格式：datetime/tide/longitude/latitude/ProcessedDepth/col6/col7）
+const TideFormat CURRENT_TIDE_FORMAT = {
+    .delimiter = '/',
+    .datetime_delimiters = 4,
+    .numeric_fields = 6
+};
 
-    // 找到datetime字段（格式為 YYYY/MM/DD/HH:MM:SS.mmm）
-    // datetime應該有4個'/'
-    char *datetime_end = NULL;
-    int slash_count = 0;
+// 解析Tide數據行 —— 高速版（零配置 + 指標走訪 + strtod）
+// 通用版本：支援自訂格式
+// 說明：避免 g_strdup 與 sscanf，改用指標掃描與 strtod，顯著減少每行開銷。
+//
+// 格式限制：
+// - datetime 必須有指定數量的分隔符結束
+// - 數值欄位必須是有效的浮點數
+// - 使用指定字符作為欄位分隔符
+//
+// 效能特點：
+// - 零動態配置：無 malloc/free 呼叫
+// - 指標走訪：直接在原字串操作
+// - strtod 解析：高效浮點數轉換
+gboolean parse_tide_data_row_ex(const char *line, TideDataRow *row,
+                               const TideFormat *format) {
+    if (!line || !row || !format) return FALSE;
 
-    for (char *ptr = first_slash_pos; ptr && *ptr; ptr = strchr(ptr + 1, '/')) {
-        slash_count++;
-        if (slash_count == 4) { // datetime有4个'/'
-            datetime_end = ptr;
-            break;
+    const char *p = line;
+
+    // 1) 跳過前導空白
+    while (*p == ' ' || *p == '\t' || *p == '\r') p++;
+
+    // 2) 找出 datetime 的結束位置（第 datetime_delimiters 個 delimiter）
+    const char *q = p;
+    int delimiter_count = 0;
+    for (; *q; ++q) {
+        if (*q == format->delimiter) {
+            ++delimiter_count;
+            if (delimiter_count == format->datetime_delimiters) break;
         }
     }
-
-    if (!datetime_end) {
-        g_free(line_copy);
-        return FALSE; // 無法找到datetime結束位置
+    if (delimiter_count != format->datetime_delimiters || *q != format->delimiter) {
+        return FALSE; // 格式不含足夠的分隔符來結束 datetime
     }
 
-    // 提取datetime部分
-    size_t datetime_len = datetime_end - line_copy;
-    if (datetime_len >= sizeof(row->datetime)) {
-        g_free(line_copy);
-        return FALSE; // datetime太長
+    // 3) 複製 datetime（不配置臨時字串）
+    size_t dt_len = (size_t)(q - p);
+    if (dt_len == 0 || dt_len >= sizeof(row->datetime)) {
+        return FALSE; // datetime 太長或為空
     }
-    memcpy(row->datetime, line_copy, datetime_len);
-    row->datetime[datetime_len] = '\0';
+    memcpy(row->datetime, p, dt_len);
+    row->datetime[dt_len] = '\0';
 
-    // 解析剩餘的數值字段
-    char *remaining = datetime_end + 1; // 跳過datetime後的第一個'/'
-    int parsed_count = sscanf(remaining, "%lf/%lf/%lf/%lf/%lf/%lf",
-                             &row->tide, &row->longitude, &row->latitude,
-                             &row->processed_depth, &row->col6, &row->col7);
+    // 4) 依序解析指定數量的數值欄位
+    p = q + 1; // 跳過 datetime 結束的分隔符
 
-    if (parsed_count != 6) {
-        g_free(line_copy);
-        return FALSE; // 數值字段解析失敗
+    char *end = NULL;
+
+    // 根據數值欄位數量動態解析
+    // 注意：目前實作假設欄位順序固定為 tide/longitude/latitude/processed_depth/col6/col7
+    // 如果需要支援不同欄位順序，可以進一步擴展 TideFormat 結構
+    if (format->numeric_fields >= 1) {
+        row->tide = strtod(p, &end);
+        if (end == p || (format->numeric_fields > 1 && *end != format->delimiter)) return FALSE;
+        p = end + 1;
     }
 
-    g_free(line_copy);
+    if (format->numeric_fields >= 2) {
+        row->longitude = strtod(p, &end);
+        if (end == p || (format->numeric_fields > 2 && *end != format->delimiter)) return FALSE;
+        p = end + 1;
+    }
+
+    if (format->numeric_fields >= 3) {
+        row->latitude = strtod(p, &end);
+        if (end == p || (format->numeric_fields > 3 && *end != format->delimiter)) return FALSE;
+        p = end + 1;
+    }
+
+    if (format->numeric_fields >= 4) {
+        row->processed_depth = strtod(p, &end);
+        if (end == p || (format->numeric_fields > 4 && *end != format->delimiter)) return FALSE;
+        p = end + 1;
+    }
+
+    if (format->numeric_fields >= 5) {
+        row->col6 = strtod(p, &end);
+        if (end == p || (format->numeric_fields > 5 && *end != format->delimiter)) return FALSE;
+        p = end + 1;
+    }
+
+    if (format->numeric_fields >= 6) {
+        row->col7 = strtod(p, &end);
+        if (end == p) return FALSE;
+    }
+
+    // 至此成功；尾端可能有換行或其他字元，無需特別處理
     return TRUE;
+}
+
+// 解析Tide數據行 —— 高速版（零配置 + 指標走訪 + strtod）
+// 向後相容版本：使用預設格式
+// 格式：datetime/tide/longitude/latitude/ProcessedDepth/col6/col7
+// 說明：避免 g_strdup 與 sscanf，改用指標掃描與 strtod，顯著減少每行開銷。
+gboolean parse_tide_data_row(const char *line, TideDataRow *row) {
+    return parse_tide_data_row_ex(line, row, &CURRENT_TIDE_FORMAT);
 }
 
 // 清理檔案分析結果

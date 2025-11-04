@@ -712,12 +712,17 @@ gboolean process_elevation_conversion_with_callback(const char *input_path, cons
 
         // 使用距離加權插值查找SEP對照值 (總是都會進行插值處理)
         double exact_adjustment = sep_hash_lookup(sep_data->hash_table, row.longitude, row.latitude);
-        double interpolated_adjustment = sep_grid_lookup_with_interpolation(sep_data->spatial_grid,
-                                                                           row.longitude, row.latitude);
+        double interpolated_adjustment = -99999.0;
 
-        char converted_line[1024];
         gboolean has_exact_match = (exact_adjustment > -99998.0);
-        gboolean has_interpolation = (interpolated_adjustment > -99998.0);
+        gboolean has_interpolation = FALSE;
+        char converted_line[1024];
+
+        if (!has_exact_match) {
+            interpolated_adjustment = sep_grid_lookup_with_interpolation(sep_data->spatial_grid,
+                                                                        row.longitude, row.latitude);
+            has_interpolation = (interpolated_adjustment > -99998.0);
+        }
 
         // 決定使用的調整值：總是嘗試插值，每次數據都要有調整！
         double final_adjustment;
